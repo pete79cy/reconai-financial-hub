@@ -2,95 +2,90 @@
 @tailwind components;
 @tailwind utilities;
 
-/* Definition of the design system. All colors, gradients, fonts, etc should be defined here. 
-All colors MUST be HSL.
-*/
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,100..1000;1,9..40,100..1000&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
 
 @layer base {
   :root {
-    --background: 0 0% 100%;
-    --foreground: 222.2 84% 4.9%;
-
-    --card: 0 0% 100%;
-    --card-foreground: 222.2 84% 4.9%;
-
-    --popover: 0 0% 100%;
-    --popover-foreground: 222.2 84% 4.9%;
-
-    --primary: 222.2 47.4% 11.2%;
-    --primary-foreground: 210 40% 98%;
-
-    --secondary: 210 40% 96.1%;
-    --secondary-foreground: 222.2 47.4% 11.2%;
-
-    --muted: 210 40% 96.1%;
-    --muted-foreground: 215.4 16.3% 46.9%;
-
-    --accent: 210 40% 96.1%;
-    --accent-foreground: 222.2 47.4% 11.2%;
-
-    --destructive: 0 84.2% 60.2%;
-    --destructive-foreground: 210 40% 98%;
-
-    --border: 214.3 31.8% 91.4%;
-    --input: 214.3 31.8% 91.4%;
-    --ring: 222.2 84% 4.9%;
-
+    /* ReconAI Dark Fintech Theme */
+    --bg-deep: 210 50% 7%;
+    --bg-card: 210 40% 12%;
+    --bg-input: 210 45% 9%;
+    --bg-elevated: 210 38% 15%;
+    
+    --border: 210 35% 18%;
+    --border-strong: 210 30% 25%;
+    
+    --text-main: 210 30% 95%;
+    --text-muted: 210 25% 55%;
+    --text-dim: 210 20% 40%;
+    
+    --brand-teal: 165 100% 42%;
+    --brand-teal-glow: 165 100% 50%;
+    --brand-blue: 217 91% 60%;
+    --brand-blue-glow: 217 100% 70%;
+    
+    --status-success: 165 100% 42%;
+    --status-warn: 38 92% 50%;
+    --status-error: 0 84% 60%;
+    --status-info: 217 91% 60%;
+    
+    /* Semantic mappings */
+    --background: var(--bg-deep);
+    --foreground: var(--text-main);
+    
+    --card: var(--bg-card);
+    --card-foreground: var(--text-main);
+    
+    --popover: var(--bg-elevated);
+    --popover-foreground: var(--text-main);
+    
+    --primary: var(--brand-teal);
+    --primary-foreground: 210 50% 7%;
+    
+    --secondary: var(--bg-elevated);
+    --secondary-foreground: var(--text-main);
+    
+    --muted: var(--bg-input);
+    --muted-foreground: var(--text-muted);
+    
+    --accent: var(--bg-elevated);
+    --accent-foreground: var(--text-main);
+    
+    --destructive: var(--status-error);
+    --destructive-foreground: 0 0% 100%;
+    
+    --border: var(--border);
+    --input: var(--bg-input);
+    --ring: var(--brand-teal);
+    
     --radius: 0.5rem;
-
-    --sidebar-background: 0 0% 98%;
-
-    --sidebar-foreground: 240 5.3% 26.1%;
-
-    --sidebar-primary: 240 5.9% 10%;
-
-    --sidebar-primary-foreground: 0 0% 98%;
-
-    --sidebar-accent: 240 4.8% 95.9%;
-
-    --sidebar-accent-foreground: 240 5.9% 10%;
-
-    --sidebar-border: 220 13% 91%;
-
-    --sidebar-ring: 217.2 91.2% 59.8%;
+    
+    /* Sidebar */
+    --sidebar-background: var(--bg-card);
+    --sidebar-foreground: var(--text-main);
+    --sidebar-primary: var(--brand-teal);
+    --sidebar-primary-foreground: 210 50% 7%;
+    --sidebar-accent: var(--bg-elevated);
+    --sidebar-accent-foreground: var(--text-main);
+    --sidebar-border: var(--border);
+    --sidebar-ring: var(--brand-teal);
+    
+    /* Gradients */
+    --gradient-teal: linear-gradient(135deg, hsl(165 100% 42%) 0%, hsl(180 100% 35%) 100%);
+    --gradient-blue: linear-gradient(135deg, hsl(217 91% 60%) 0%, hsl(230 100% 65%) 100%);
+    --gradient-card: linear-gradient(180deg, hsl(210 40% 14%) 0%, hsl(210 40% 10%) 100%);
+    --gradient-glow-teal: radial-gradient(ellipse at center, hsl(165 100% 42% / 0.15) 0%, transparent 70%);
+    --gradient-glow-blue: radial-gradient(ellipse at center, hsl(217 91% 60% / 0.15) 0%, transparent 70%);
+    
+    /* Shadows */
+    --shadow-card: 0 4px 24px -8px hsl(210 50% 5% / 0.8);
+    --shadow-elevated: 0 8px 32px -8px hsl(210 50% 5% / 0.9);
+    --shadow-glow-teal: 0 0 40px -10px hsl(165 100% 42% / 0.4);
+    --shadow-glow-blue: 0 0 40px -10px hsl(217 91% 60% / 0.4);
   }
 
   .dark {
-    --background: 222.2 84% 4.9%;
-    --foreground: 210 40% 98%;
-
-    --card: 222.2 84% 4.9%;
-    --card-foreground: 210 40% 98%;
-
-    --popover: 222.2 84% 4.9%;
-    --popover-foreground: 210 40% 98%;
-
-    --primary: 210 40% 98%;
-    --primary-foreground: 222.2 47.4% 11.2%;
-
-    --secondary: 217.2 32.6% 17.5%;
-    --secondary-foreground: 210 40% 98%;
-
-    --muted: 217.2 32.6% 17.5%;
-    --muted-foreground: 215 20.2% 65.1%;
-
-    --accent: 217.2 32.6% 17.5%;
-    --accent-foreground: 210 40% 98%;
-
-    --destructive: 0 62.8% 30.6%;
-    --destructive-foreground: 210 40% 98%;
-
-    --border: 217.2 32.6% 17.5%;
-    --input: 217.2 32.6% 17.5%;
-    --ring: 212.7 26.8% 83.9%;
-    --sidebar-background: 240 5.9% 10%;
-    --sidebar-foreground: 240 4.8% 95.9%;
-    --sidebar-primary: 224.3 76.3% 48%;
-    --sidebar-primary-foreground: 0 0% 100%;
-    --sidebar-accent: 240 3.7% 15.9%;
-    --sidebar-accent-foreground: 240 4.8% 95.9%;
-    --sidebar-border: 240 3.7% 15.9%;
-    --sidebar-ring: 217.2 91.2% 59.8%;
+    /* Already dark by default */
   }
 }
 
@@ -99,7 +94,127 @@ All colors MUST be HSL.
     @apply border-border;
   }
 
+  html {
+    font-family: 'DM Sans', system-ui, sans-serif;
+  }
+
   body {
-    @apply bg-background text-foreground;
+    @apply bg-background text-foreground antialiased;
+    background: hsl(var(--bg-deep));
+  }
+
+  /* Monospace for financial numbers */
+  .font-mono {
+    font-family: 'JetBrains Mono', monospace;
+  }
+}
+
+@layer components {
+  /* Data table styling */
+  .recon-table {
+    @apply w-full text-sm;
+  }
+  
+  .recon-table th {
+    @apply px-4 py-3 text-left font-medium text-muted-foreground uppercase tracking-wider text-xs;
+  }
+  
+  .recon-table td {
+    @apply px-4 py-3 border-t border-border;
+  }
+  
+  .recon-table tr:hover td {
+    @apply bg-secondary/50;
+  }
+  
+  /* Status badges */
+  .status-badge {
+    @apply inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium;
+  }
+  
+  .status-matched {
+    @apply bg-primary/10 text-primary;
+  }
+  
+  .status-pending {
+    @apply bg-status-warn/10 text-status-warn;
+  }
+  
+  .status-unmatched {
+    @apply bg-muted text-muted-foreground;
+  }
+  
+  .status-rejected {
+    @apply bg-destructive/10 text-destructive;
+  }
+  
+  .status-approved {
+    @apply bg-primary/10 text-primary;
+  }
+  
+  /* Confidence meter */
+  .confidence-bar {
+    @apply h-1.5 rounded-full overflow-hidden bg-muted;
+  }
+  
+  .confidence-fill {
+    @apply h-full rounded-full transition-all duration-500;
+  }
+  
+  /* Glow effects */
+  .glow-teal {
+    box-shadow: var(--shadow-glow-teal);
+  }
+  
+  .glow-blue {
+    box-shadow: var(--shadow-glow-blue);
+  }
+  
+  /* Card gradient */
+  .card-gradient {
+    background: var(--gradient-card);
+  }
+  
+  /* Ring chart animation */
+  @keyframes ring-draw {
+    from {
+      stroke-dashoffset: var(--circumference);
+    }
+    to {
+      stroke-dashoffset: var(--target-offset);
+    }
+  }
+  
+  .ring-animated {
+    animation: ring-draw 1.5s ease-out forwards;
+  }
+  
+  /* Scrollbar styling */
+  ::-webkit-scrollbar {
+    @apply w-2;
+  }
+  
+  ::-webkit-scrollbar-track {
+    @apply bg-background;
+  }
+  
+  ::-webkit-scrollbar-thumb {
+    @apply bg-border rounded-full;
+  }
+  
+  ::-webkit-scrollbar-thumb:hover {
+    @apply bg-border-strong;
+  }
+}
+
+@layer utilities {
+  .text-gradient-teal {
+    @apply bg-clip-text text-transparent;
+    background-image: var(--gradient-teal);
+  }
+  
+  .text-gradient-blue {
+    @apply bg-clip-text text-transparent;
+    background-image: var(--gradient-blue);
   }
 }
