@@ -1,9 +1,32 @@
 export type MatchType = '1:1' | '1:N' | 'Manual' | 'System';
 export type Status = 'matched' | 'pending' | 'unmatched' | 'rejected' | 'approved';
 export type ApprovalStage = 'none' | 'submitted' | 'review' | 'posted';
-export type BankName = 'Piraeus' | 'Alpha' | 'Eurobank';
+export type BankName = 'Piraeus' | 'Alpha' | 'Eurobank' | 'BOC';
+export type TransactionSource = 'bank' | 'gl';
 
-export interface Transaction {
+export interface BankTransaction {
+  id: string;
+  date: string;
+  description: string;
+  amount: number;
+  currency: 'EUR';
+  type: 'debit' | 'credit';
+  reference?: string;
+  bank_name: BankName;
+}
+
+export interface GLTransaction {
+  id: string;
+  date: string;
+  description: string;
+  amount: number;
+  currency: 'EUR';
+  type: 'debit' | 'credit';
+  reference?: string;
+  source: string; // e.g., "Expense BOCY", "Deposit", "Payment"
+}
+
+export interface MatchedTransaction {
   id: string;
   date: string;
   bank_desc: string;
@@ -16,7 +39,12 @@ export interface Transaction {
   status: Status;
   approval_stage: ApprovalStage;
   flags?: string[];
+  bank_tx_id?: string;
+  gl_tx_id?: string;
 }
+
+// Legacy alias for backward compatibility
+export type Transaction = MatchedTransaction;
 
 export interface RulesState {
   weekendAlert: boolean;
@@ -25,12 +53,18 @@ export interface RulesState {
 
 export interface ReconContextType {
   transactions: Transaction[];
+  bankTransactions: BankTransaction[];
+  glTransactions: GLTransaction[];
   rulesState: RulesState;
   updateStatus: (id: string, newStatus: Status) => void;
   updateApprovalStage: (id: string, newStage: ApprovalStage) => void;
   toggleRule: (ruleKey: keyof RulesState) => void;
   recalculateFlags: () => void;
   importTransactions: (newTransactions: Transaction[]) => void;
+  importBankTransactions: (txs: BankTransaction[]) => void;
+  importGLTransactions: (txs: GLTransaction[]) => void;
+  runAutoMatch: () => void;
+  clearAllData: () => void;
 }
 
 // Seed data
