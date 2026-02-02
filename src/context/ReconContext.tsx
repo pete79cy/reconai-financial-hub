@@ -112,6 +112,14 @@ export function ReconProvider({ children }: { children: React.ReactNode }) {
     });
   }, []);
 
+  const importTransactions = useCallback((newTransactions: Transaction[]) => {
+    setTransactions(prev => {
+      const updated = [...prev, ...newTransactions];
+      saveTransactions(updated);
+      return updated;
+    });
+  }, []);
+
   return (
     <ReconContext.Provider value={{
       transactions,
@@ -120,6 +128,7 @@ export function ReconProvider({ children }: { children: React.ReactNode }) {
       updateApprovalStage,
       toggleRule,
       recalculateFlags,
+      importTransactions,
     }}>
       {children}
     </ReconContext.Provider>

@@ -30,6 +30,7 @@ export interface ReconContextType {
   updateApprovalStage: (id: string, newStage: ApprovalStage) => void;
   toggleRule: (ruleKey: keyof RulesState) => void;
   recalculateFlags: () => void;
+  importTransactions: (newTransactions: Transaction[]) => void;
 }
 
 // Seed data
