@@ -1,14 +1,19 @@
 import React, { createContext, useContext, useState, useCallback, useEffect } from 'react';
 import { 
   Transaction, 
+  BankTransaction,
+  GLTransaction,
   RulesState, 
   ReconContextType, 
   Status, 
   ApprovalStage,
   INITIAL_TRANSACTIONS 
 } from '@/types/transaction';
+import { calculateConfidence } from '@/utils/reconciliation';
 
 const STORAGE_KEY = 'reconai_transactions';
+const BANK_STORAGE_KEY = 'reconai_bank_transactions';
+const GL_STORAGE_KEY = 'reconai_gl_transactions';
 const RULES_KEY = 'reconai_rules';
 
 const ReconContext = createContext<ReconContextType | undefined>(undefined);
@@ -23,6 +28,30 @@ function loadTransactions(): Transaction[] {
     console.error('Failed to load transactions:', e);
   }
   return INITIAL_TRANSACTIONS;
+}
+
+function loadBankTransactions(): BankTransaction[] {
+  try {
+    const stored = localStorage.getItem(BANK_STORAGE_KEY);
+    if (stored) {
+      return JSON.parse(stored);
+    }
+  } catch (e) {
+    console.error('Failed to load bank transactions:', e);
+  }
+  return [];
+}
+
+function loadGLTransactions(): GLTransaction[] {
+  try {
+    const stored = localStorage.getItem(GL_STORAGE_KEY);
+    if (stored) {
+      return JSON.parse(stored);
+    }
+  } catch (e) {
+    console.error('Failed to load GL transactions:', e);
+  }
+  return [];
 }
 
 function loadRules(): RulesState {
@@ -41,6 +70,14 @@ function saveTransactions(transactions: Transaction[]) {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(transactions));
 }
 
+function saveBankTransactions(transactions: BankTransaction[]) {
+  localStorage.setItem(BANK_STORAGE_KEY, JSON.stringify(transactions));
+}
+
+function saveGLTransactions(transactions: GLTransaction[]) {
+  localStorage.setItem(GL_STORAGE_KEY, JSON.stringify(transactions));
+}
+
 function saveRules(rules: RulesState) {
   localStorage.setItem(RULES_KEY, JSON.stringify(rules));
 }
@@ -56,6 +93,8 @@ function isHighValue(amount: number): boolean {
 
 export function ReconProvider({ children }: { children: React.ReactNode }) {
   const [transactions, setTransactions] = useState<Transaction[]>(loadTransactions);
+  const [bankTransactions, setBankTransactions] = useState<BankTransaction[]>(loadBankTransactions);
+  const [glTransactions, setGLTransactions] = useState<GLTransaction[]>(loadGLTransactions);
   const [rulesState, setRulesState] = useState<RulesState>(loadRules);
 
   const recalculateFlags = useCallback(() => {
@@ -120,15 +159,149 @@ export function ReconProvider({ children }: { children: React.ReactNode }) {
     });
   }, []);
 
+  const importBankTransactions = useCallback((txs: BankTransaction[]) => {
+    setBankTransactions(prev => {
+      const updated = [...prev, ...txs];
+      saveBankTransactions(updated);
+      return updated;
+    });
+  }, []);
+
+  const importGLTransactions = useCallback((txs: GLTransaction[]) => {
+    setGLTransactions(prev => {
+      const updated = [...prev, ...txs];
+      saveGLTransactions(updated);
+      return updated;
+    });
+  }, []);
+
+  const runAutoMatch = useCallback(() => {
+    const usedBankIds = new Set<string>();
+    const usedGLIds = new Set<string>();
+    const newMatches: Transaction[] = [];
+
+    // Match bank transactions to GL transactions
+    for (const bankTx of bankTransactions) {
+      if (usedBankIds.has(bankTx.id)) continue;
+
+      let bestMatch: GLTransaction | null = null;
+      let bestConfidence = 0;
+
+      for (const glTx of glTransactions) {
+        if (usedGLIds.has(glTx.id)) continue;
+
+        // Must be same type (debit/credit)
+        if (bankTx.type !== glTx.type) continue;
+
+        const confidence = calculateConfidence(
+          bankTx.amount,
+          glTx.amount,
+          bankTx.description,
+          glTx.description
+        );
+
+        if (confidence > bestConfidence && confidence >= 50) {
+          bestConfidence = confidence;
+          bestMatch = glTx;
+        }
+      }
+
+      if (bestMatch) {
+        usedBankIds.add(bankTx.id);
+        usedGLIds.add(bestMatch.id);
+
+        newMatches.push({
+          id: `MATCH-${Date.now()}-${newMatches.length}`,
+          date: bankTx.date,
+          bank_desc: bankTx.description,
+          gl_desc: bestMatch.description,
+          amount: bankTx.amount,
+          currency: 'EUR',
+          bank_name: bankTx.bank_name,
+          match_type: bestConfidence >= 90 ? '1:1' : 'Manual',
+          confidence: bestConfidence,
+          status: bestConfidence >= 80 ? 'matched' : 'pending',
+          approval_stage: 'none',
+          bank_tx_id: bankTx.id,
+          gl_tx_id: bestMatch.id,
+        });
+      }
+    }
+
+    // Add unmatched bank transactions
+    for (const bankTx of bankTransactions) {
+      if (!usedBankIds.has(bankTx.id)) {
+        newMatches.push({
+          id: `UNMATCHED-BANK-${Date.now()}-${bankTx.id}`,
+          date: bankTx.date,
+          bank_desc: bankTx.description,
+          gl_desc: '',
+          amount: bankTx.amount,
+          currency: 'EUR',
+          bank_name: bankTx.bank_name,
+          match_type: 'Manual',
+          confidence: 0,
+          status: 'unmatched',
+          approval_stage: 'none',
+          bank_tx_id: bankTx.id,
+        });
+      }
+    }
+
+    // Add unmatched GL transactions
+    for (const glTx of glTransactions) {
+      if (!usedGLIds.has(glTx.id)) {
+        newMatches.push({
+          id: `UNMATCHED-GL-${Date.now()}-${glTx.id}`,
+          date: glTx.date,
+          bank_desc: '',
+          gl_desc: glTx.description,
+          amount: glTx.amount,
+          currency: 'EUR',
+          bank_name: 'BOC',
+          match_type: 'Manual',
+          confidence: 0,
+          status: 'unmatched',
+          approval_stage: 'none',
+          gl_tx_id: glTx.id,
+        });
+      }
+    }
+
+    if (newMatches.length > 0) {
+      setTransactions(prev => {
+        const updated = [...prev, ...newMatches];
+        saveTransactions(updated);
+        return updated;
+      });
+    }
+  
+  }, [bankTransactions, glTransactions]);
+
+  const clearAllData = useCallback(() => {
+    setTransactions(INITIAL_TRANSACTIONS);
+    setBankTransactions([]);
+    setGLTransactions([]);
+    saveTransactions(INITIAL_TRANSACTIONS);
+    saveBankTransactions([]);
+    saveGLTransactions([]);
+  }, []);
+
   return (
     <ReconContext.Provider value={{
       transactions,
+      bankTransactions,
+      glTransactions,
       rulesState,
       updateStatus,
       updateApprovalStage,
       toggleRule,
       recalculateFlags,
       importTransactions,
+      importBankTransactions,
+      importGLTransactions,
+      runAutoMatch,
+      clearAllData,
     }}>
       {children}
     </ReconContext.Provider>

@@ -91,23 +91,23 @@ export function levenshteinDistance(a: string, b: string): number {
   return matrix[b.length][a.length];
 }
 
-export function calculateConfidence(bankDesc: string, glDesc: string, amount1: number, amount2: number): number {
+export function calculateConfidence(amount1: number, amount2: number, desc1: string, desc2: string): number {
   let confidence = 0;
   
   // Amount matching (70 points max)
   if (Math.abs(amount1 - amount2) < 0.01) {
     confidence += 70;
   } else {
-    const amountDiff = Math.abs(amount1 - amount2) / Math.max(amount1, amount2);
+    const amountDiff = Math.abs(amount1 - amount2) / Math.max(amount1, amount2, 1);
     confidence += Math.max(0, 70 * (1 - amountDiff));
   }
   
   // Description similarity (30 points max)
-  const maxLen = Math.max(bankDesc.length, glDesc.length);
+  const maxLen = Math.max(desc1.length, desc2.length);
   if (maxLen > 0) {
     const distance = levenshteinDistance(
-      bankDesc.toLowerCase(), 
-      glDesc.toLowerCase()
+      desc1.toLowerCase(), 
+      desc2.toLowerCase()
     );
     const similarity = 1 - (distance / maxLen);
     confidence += similarity * 30;

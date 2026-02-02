@@ -6,7 +6,9 @@ import {
   TrendingUp,
   Banknote,
   AlertTriangle,
-  Activity
+  Activity,
+  FileText,
+  FileSpreadsheet
 } from 'lucide-react';
 import { TopBar } from '@/components/layout/TopBar';
 import { KPICard } from '@/components/cards/KPICard';
@@ -15,12 +17,13 @@ import { useRecon } from '@/context/ReconContext';
 import { formatCurrency } from '@/utils/reconciliation';
 
 export default function Dashboard() {
-  const { transactions } = useRecon();
+  const { transactions, bankTransactions, glTransactions } = useRecon();
 
   // Calculate KPIs
   const matched = transactions.filter(t => t.status === 'matched').length;
   const pending = transactions.filter(t => t.status === 'pending').length;
   const rejected = transactions.filter(t => t.status === 'rejected').length;
+  const unmatched = transactions.filter(t => t.status === 'unmatched').length;
   const total = transactions.length;
   const matchRate = total > 0 ? Math.round((matched / total) * 100) : 0;
   
@@ -37,6 +40,9 @@ export default function Dashboard() {
     ? Math.round(transactions.reduce((sum, t) => sum + t.confidence, 0) / transactions.length)
     : 0;
 
+  const bankCount = bankTransactions.length;
+  const glCount = glTransactions.length;
+
   return (
     <div className="min-h-screen">
       <TopBar 
@@ -45,6 +51,26 @@ export default function Dashboard() {
       />
       
       <div className="p-6 space-y-6">
+        {/* Import Status Cards */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <KPICard
+            title="Bank Transactions"
+            value={bankCount}
+            subtitle="Imported from bank"
+            icon={FileText}
+            color="blue"
+            delay={0}
+          />
+          <KPICard
+            title="GL Transactions"
+            value={glCount}
+            subtitle="Imported from accounting"
+            icon={FileSpreadsheet}
+            color="teal"
+            delay={0.1}
+          />
+        </div>
+
         {/* KPI Cards */}
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
           <KPICard
@@ -65,9 +91,9 @@ export default function Dashboard() {
             delay={0.1}
           />
           <KPICard
-            title="Rejected Items"
-            value={rejected}
-            subtitle="Needs attention"
+            title="Unmatched Items"
+            value={unmatched}
+            subtitle="No match found"
             icon={XCircle}
             color="error"
             delay={0.2}
