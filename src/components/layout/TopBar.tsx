@@ -68,6 +68,35 @@ export function TopBar({ title, subtitle }: TopBarProps) {
     setIsDragging(false);
   };
 
+  // Parse European number format (e.g., "1.234,56" -> 1234.56)
+  const parseEuropeanNumber = (value: string): number => {
+    if (!value || value.trim() === '') return 0;
+    // Remove thousand separators (.) and replace decimal comma with dot
+    const cleaned = value.replace(/\./g, '').replace(',', '.');
+    return parseFloat(cleaned) || 0;
+  };
+
+  // Convert DD/MM/YYYY to YYYY-MM-DD
+  const parseEuropeanDate = (dateStr: string): string => {
+    const parts = dateStr.split('/');
+    if (parts.length === 3) {
+      const [day, month, year] = parts;
+      return `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`;
+    }
+    return dateStr;
+  };
+
+  // Find the header row index (skip metadata rows)
+  const findHeaderRowIndex = (lines: string[]): number => {
+    for (let i = 0; i < Math.min(lines.length, 10); i++) {
+      const line = lines[i].toLowerCase();
+      if (line.includes('date') && (line.includes('description') || line.includes('debit') || line.includes('credit'))) {
+        return i;
+      }
+    }
+    return 0;
+  };
+
   const handleUpload = async () => {
     if (!selectedFile) return;
     
@@ -81,34 +110,49 @@ export function TopBar({ title, subtitle }: TopBarProps) {
         return;
       }
 
-      const headers = lines[0].split(',').map(h => h.trim().toLowerCase());
-      const requiredHeaders = ['date', 'bank_desc', 'amount'];
-      const missingHeaders = requiredHeaders.filter(h => !headers.includes(h));
+      // Find the actual header row (skip bank metadata)
+      const headerRowIndex = findHeaderRowIndex(lines);
+      const headers = parseCSVLine(lines[headerRowIndex]).map(h => h.trim().toLowerCase());
       
-      if (missingHeaders.length > 0) {
-        toast.error(`Missing required columns: ${missingHeaders.join(', ')}`);
-        return;
-      }
-
+      // Detect format: bank format has 'debit'/'credit', our format has 'amount'
+      const isBankFormat = headers.includes('debit') || headers.includes('credit');
+      
       const newTransactions = [];
-      for (let i = 1; i < lines.length; i++) {
+      for (let i = headerRowIndex + 1; i < lines.length; i++) {
         const values = parseCSVLine(lines[i]);
-        if (values.length !== headers.length) continue;
+        if (values.length < 2) continue;
 
         const row: Record<string, string> = {};
         headers.forEach((h, idx) => row[h] = values[idx]?.trim() || '');
 
-        const amount = parseFloat(row.amount?.replace(/[€,]/g, '') || '0');
-        if (isNaN(amount)) continue;
+        let amount: number;
+        let description: string;
+        let date: string;
+
+        if (isBankFormat) {
+          // Bank of Cyprus format
+          const debit = parseEuropeanNumber(row.debit || '');
+          const credit = parseEuropeanNumber(row.credit || '');
+          amount = credit > 0 ? credit : -debit;
+          description = row.description || 'Imported Transaction';
+          date = parseEuropeanDate(row.date || '');
+        } else {
+          // Original app format
+          amount = parseFloat(row.amount?.replace(/[€,]/g, '') || '0');
+          description = row.bank_desc || row.description || 'Imported Transaction';
+          date = row.date || new Date().toISOString().split('T')[0];
+        }
+
+        if (isNaN(amount) || amount === 0) continue;
 
         newTransactions.push({
           id: `REC-${Date.now()}-${i}`,
-          date: row.date || new Date().toISOString().split('T')[0],
-          bank_desc: row.bank_desc || row.description || 'Imported Transaction',
-          gl_desc: row.gl_desc || '',
-          amount,
+          date,
+          bank_desc: description,
+          gl_desc: row['transaction type'] || row.gl_desc || '',
+          amount: Math.abs(amount),
           currency: 'EUR' as const,
-          bank_name: (row.bank_name as 'Piraeus' | 'Alpha' | 'Eurobank') || 'Piraeus',
+          bank_name: 'Piraeus' as const, // Default bank
           match_type: 'Manual' as const,
           confidence: 0,
           status: 'pending' as const,
