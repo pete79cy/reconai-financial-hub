@@ -34,19 +34,20 @@ import { toast } from 'sonner';
 import * as XLSX from 'xlsx';
 
 interface ReconciliationSummary {
-  bank_balance: number;
-  outstanding_deposits: number;
-  outstanding_checks: number;
-  outstanding_other: number;
-  adjusted_bank_balance: number;
-  gl_balance: number;
-  fees_not_booked: number;
-  deposit_corrections: number;
-  adjusted_gl_balance: number;
+  bankBalance: number;
+  outstandingDeposits: number;
+  outstandingChecks: number;
+  outstandingOther: number;
+  adjustedBankBalance: number;
+  glBalance: number;
+  feesNotBooked: number;
+  depositCorrections: number;
+  otherAdjustments: number;
+  adjustedGLBalance: number;
   proof: number;
-  outstanding_checks_list: OutstandingItem[];
-  outstanding_deposits_list: OutstandingItem[];
-  outstanding_other_list: OutstandingItem[];
+  outstandingChecksList: OutstandingItem[];
+  outstandingDepositsList: OutstandingItem[];
+  outstandingOtherList: OutstandingItem[];
   adjustments: Adjustment[];
 }
 
@@ -72,10 +73,10 @@ interface Adjustment {
 interface PeriodRecord {
   id: string;
   status: string;
-  bank_balance: number | null;
-  gl_balance: number | null;
-  adjusted_bank_balance: number | null;
-  adjusted_gl_balance: number | null;
+  bank_balance?: number | null;
+  gl_balance?: number | null;
+  adjusted_bank_balance?: number | null;
+  adjusted_gl_balance?: number | null;
   proof: number | null;
   closed_at: string | null;
   created_at: string;
@@ -97,19 +98,20 @@ interface OutstandingRecord {
 }
 
 const defaultSummary: ReconciliationSummary = {
-  bank_balance: 0,
-  outstanding_deposits: 0,
-  outstanding_checks: 0,
-  outstanding_other: 0,
-  adjusted_bank_balance: 0,
-  gl_balance: 0,
-  fees_not_booked: 0,
-  deposit_corrections: 0,
-  adjusted_gl_balance: 0,
+  bankBalance: 0,
+  outstandingDeposits: 0,
+  outstandingChecks: 0,
+  outstandingOther: 0,
+  adjustedBankBalance: 0,
+  glBalance: 0,
+  feesNotBooked: 0,
+  depositCorrections: 0,
+  otherAdjustments: 0,
+  adjustedGLBalance: 0,
   proof: 0,
-  outstanding_checks_list: [],
-  outstanding_deposits_list: [],
-  outstanding_other_list: [],
+  outstandingChecksList: [],
+  outstandingDepositsList: [],
+  outstandingOtherList: [],
   adjustments: [],
 };
 
@@ -231,11 +233,11 @@ export default function Reconciliation() {
     setSummary(prev => {
       const updated = { ...prev, adjustments: [...prev.adjustments, adjustment] };
       if (adjustment.category === 'bank') {
-        updated.adjusted_bank_balance += adjustment.amount;
+        updated.adjustedBankBalance += adjustment.amount;
       } else {
-        updated.adjusted_gl_balance += adjustment.amount;
+        updated.adjustedGLBalance += adjustment.amount;
       }
-      updated.proof = updated.adjusted_bank_balance - updated.adjusted_gl_balance;
+      updated.proof = updated.adjustedBankBalance - updated.adjustedGLBalance;
       return updated;
     });
 
@@ -584,12 +586,12 @@ export default function Reconciliation() {
                 Bank Side
               </h2>
               <div className="space-y-0">
-                <SummaryLine label="Balance per Bank Statement" amount={summary.bank_balance} isBold />
-                <SummaryLine label="Outstanding Deposits" amount={summary.outstanding_deposits} isAdd={true} />
-                <SummaryLine label="Outstanding Checks" amount={summary.outstanding_checks} isAdd={false} />
-                <SummaryLine label="Outstanding Other" amount={summary.outstanding_other} isAdd={false} />
+                <SummaryLine label="Balance per Bank Statement" amount={summary.bankBalance} isBold />
+                <SummaryLine label="Outstanding Deposits" amount={summary.outstandingDeposits} isAdd={true} />
+                <SummaryLine label="Outstanding Checks" amount={summary.outstandingChecks} isAdd={false} />
+                <SummaryLine label="Outstanding Other" amount={summary.outstandingOther} isAdd={false} />
                 <div className="border-t border-border my-2" />
-                <SummaryLine label="Adjusted Bank Balance" amount={summary.adjusted_bank_balance} isBold />
+                <SummaryLine label="Adjusted Bank Balance" amount={summary.adjustedBankBalance} isBold />
               </div>
             </motion.div>
 
@@ -605,11 +607,11 @@ export default function Reconciliation() {
                 GL Side
               </h2>
               <div className="space-y-0">
-                <SummaryLine label="Balance per G/L" amount={summary.gl_balance} isBold />
-                <SummaryLine label="Fees Not Yet Booked" amount={summary.fees_not_booked} isAdd={true} />
-                <SummaryLine label="Deposit Corrections" amount={summary.deposit_corrections} isAdd={true} />
+                <SummaryLine label="Balance per G/L" amount={summary.glBalance} isBold />
+                <SummaryLine label="Fees Not Yet Booked" amount={summary.feesNotBooked} isAdd={true} />
+                <SummaryLine label="Deposit Corrections" amount={summary.depositCorrections} isAdd={true} />
                 <div className="border-t border-border my-2" />
-                <SummaryLine label="Adjusted G/L Balance" amount={summary.adjusted_gl_balance} isBold />
+                <SummaryLine label="Adjusted G/L Balance" amount={summary.adjustedGLBalance} isBold />
               </div>
             </motion.div>
 
@@ -662,20 +664,20 @@ export default function Reconciliation() {
             >
               <ExpandableSection
                 title="Outstanding Checks"
-                count={summary.outstanding_checks_list.length}
-                items={summary.outstanding_checks_list}
+                count={summary.outstandingChecks_list.length}
+                items={summary.outstandingChecks_list}
                 sectionKey="checks"
               />
               <ExpandableSection
                 title="Outstanding Deposits"
-                count={summary.outstanding_deposits_list.length}
-                items={summary.outstanding_deposits_list}
+                count={summary.outstandingDeposits_list.length}
+                items={summary.outstandingDeposits_list}
                 sectionKey="deposits"
               />
               <ExpandableSection
                 title="Outstanding Other"
-                count={summary.outstanding_other_list.length}
-                items={summary.outstanding_other_list}
+                count={summary.outstandingOther_list.length}
+                items={summary.outstandingOther_list}
                 sectionKey="other"
               />
 
