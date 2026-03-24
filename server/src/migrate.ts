@@ -56,6 +56,49 @@ export async function runMigrations() {
       VALUES (1, TRUE, TRUE)
       ON CONFLICT (id) DO NOTHING;
     `);
+
+    // Add new columns to bank_transactions
+    await client.query(`
+      ALTER TABLE bank_transactions ADD COLUMN IF NOT EXISTS transaction_type TEXT;
+      ALTER TABLE bank_transactions ADD COLUMN IF NOT EXISTS reference_number TEXT;
+      ALTER TABLE bank_transactions ADD COLUMN IF NOT EXISTS value_date DATE;
+      ALTER TABLE bank_transactions ADD COLUMN IF NOT EXISTS balance DECIMAL(15,2);
+      ALTER TABLE bank_transactions ADD COLUMN IF NOT EXISTS branch_code TEXT;
+    `);
+
+    // Add new columns to gl_transactions
+    await client.query(`
+      ALTER TABLE gl_transactions ADD COLUMN IF NOT EXISTS sequence TEXT;
+    `);
+
+    // Add new columns to matched_transactions
+    await client.query(`
+      ALTER TABLE matched_transactions ADD COLUMN IF NOT EXISTS match_category TEXT;
+    `);
+
+    // New tables
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS reconciliation_adjustments (
+        id TEXT PRIMARY KEY,
+        period TEXT NOT NULL,
+        category TEXT NOT NULL,
+        description TEXT,
+        amount DECIMAL(15,2) NOT NULL,
+        created_at TIMESTAMPTZ DEFAULT NOW()
+      );
+
+      CREATE TABLE IF NOT EXISTS bank_metadata (
+        id SERIAL PRIMARY KEY,
+        account_number TEXT,
+        account_holder TEXT,
+        period_from DATE,
+        period_to DATE,
+        opening_balance DECIMAL(15,2),
+        closing_balance DECIMAL(15,2),
+        created_at TIMESTAMPTZ DEFAULT NOW()
+      );
+    `);
+
     console.log('Database migrations completed successfully');
   } catch (err) {
     console.error('Migration error:', err);

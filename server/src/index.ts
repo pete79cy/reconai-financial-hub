@@ -6,6 +6,7 @@ import glRoutes from './routes/gl';
 import transactionRoutes from './routes/transactions';
 import matchingRoutes from './routes/matching';
 import rulesRoutes from './routes/rules';
+import reconciliationRoutes from './routes/reconciliation';
 import pool from './db';
 import { HIGH_VALUE_THRESHOLD } from './utils/reconciliation';
 
@@ -21,6 +22,7 @@ app.use('/api/gl-transactions', glRoutes);
 app.use('/api/transactions', transactionRoutes);
 app.use('/api/matching', matchingRoutes);
 app.use('/api/rules', rulesRoutes);
+app.use('/api/reconciliation', reconciliationRoutes);
 
 // GET /api/stats - dashboard statistics
 app.get('/api/stats', async (_req, res) => {

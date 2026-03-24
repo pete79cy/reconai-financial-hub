@@ -31,6 +31,7 @@ type SortKey =
   | 'confidence'
   | 'status';
 type SortDir = 'asc' | 'desc';
+type CategoryFilter = 'all' | 'cheque' | 'deposit' | 'other' | 'unmatched';
 
 function getRowBorderColor(status: string): string {
   switch (status) {
@@ -56,6 +57,7 @@ export default function Matching() {
   const [sortKey, setSortKey] = useState<SortKey>('date');
   const [sortDir, setSortDir] = useState<SortDir>('desc');
   const [page, setPage] = useState(0);
+  const [activeCategory, setActiveCategory] = useState<CategoryFilter>('all');
 
   const sorted = useMemo(() => {
     const copy = [...filteredTransactions];
@@ -73,9 +75,23 @@ export default function Matching() {
     return copy;
   }, [filteredTransactions, sortKey, sortDir]);
 
-  const totalPages = Math.max(1, Math.ceil(sorted.length / DEFAULT_PAGE_SIZE));
+  const categories = useMemo(() => [
+    { key: 'all' as const, label: 'All', count: sorted.length },
+    { key: 'cheque' as const, label: 'Checks', count: sorted.filter(t => t.match_category === 'cheque').length },
+    { key: 'deposit' as const, label: 'Deposits', count: sorted.filter(t => t.match_category === 'deposit').length },
+    { key: 'other' as const, label: 'Other', count: sorted.filter(t => t.match_category === 'other').length },
+    { key: 'unmatched' as const, label: 'Unmatched', count: sorted.filter(t => t.status === 'unmatched').length },
+  ], [sorted]);
+
+  const filteredByCategory = useMemo(() => {
+    if (activeCategory === 'all') return sorted;
+    if (activeCategory === 'unmatched') return sorted.filter(t => t.status === 'unmatched');
+    return sorted.filter(t => t.match_category === activeCategory);
+  }, [sorted, activeCategory]);
+
+  const totalPages = Math.max(1, Math.ceil(filteredByCategory.length / DEFAULT_PAGE_SIZE));
   const safePage = Math.min(page, totalPages - 1);
-  const paginated = sorted.slice(
+  const paginated = filteredByCategory.slice(
     safePage * DEFAULT_PAGE_SIZE,
     (safePage + 1) * DEFAULT_PAGE_SIZE
   );
@@ -87,6 +103,11 @@ export default function Matching() {
       setSortKey(key);
       setSortDir('asc');
     }
+    setPage(0);
+  };
+
+  const handleCategoryChange = (key: CategoryFilter) => {
+    setActiveCategory(key);
     setPage(0);
   };
 
@@ -137,6 +158,30 @@ export default function Matching() {
       <TopBar title="Matching" subtitle="Transaction Reconciliation" />
 
       <div className="p-6">
+        {/* Category Tabs */}
+        <div className="flex items-center gap-2 mb-4 flex-wrap">
+          {categories.map((cat) => (
+            <button
+              key={cat.key}
+              onClick={() => handleCategoryChange(cat.key)}
+              className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm font-medium transition-colors ${
+                activeCategory === cat.key
+                  ? 'bg-primary text-primary-foreground'
+                  : 'bg-secondary/50 text-muted-foreground hover:bg-secondary hover:text-foreground'
+              }`}
+            >
+              {cat.label}
+              <span className={`text-xs px-1.5 py-0.5 rounded-full ${
+                activeCategory === cat.key
+                  ? 'bg-primary-foreground/20 text-primary-foreground'
+                  : 'bg-muted text-muted-foreground'
+              }`}>
+                {cat.count}
+              </span>
+            </button>
+          ))}
+        </div>
+
         <motion.div
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
@@ -228,15 +273,15 @@ export default function Matching() {
               </div>
 
               {/* Pagination */}
-              {sorted.length > DEFAULT_PAGE_SIZE && (
+              {filteredByCategory.length > DEFAULT_PAGE_SIZE && (
                 <div className="flex items-center justify-between px-4 py-3 border-t border-border">
                   <p className="text-sm text-muted-foreground">
                     Showing {safePage * DEFAULT_PAGE_SIZE + 1}&ndash;
                     {Math.min(
                       (safePage + 1) * DEFAULT_PAGE_SIZE,
-                      sorted.length
+                      filteredByCategory.length
                     )}{' '}
-                    of {sorted.length}
+                    of {filteredByCategory.length}
                   </p>
                   <div className="flex items-center gap-1">
                     <Button

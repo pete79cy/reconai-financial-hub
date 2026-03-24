@@ -29,12 +29,23 @@ type ParsedPreview = {
   transactions: BankTransaction[] | GLTransaction[];
 };
 
+interface BankMetadata {
+  accountNumber?: string;
+  accountName?: string;
+  accountType?: string;
+  currency?: string;
+  periodFrom?: string;
+  periodTo?: string;
+  closingBalance?: number;
+}
+
 export function ImportModal({ open, onOpenChange, type, onImport }: ImportModalProps) {
   const [isDragging, setIsDragging] = useState(false);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
   const [step, setStep] = useState<1 | 2>(1);
   const [preview, setPreview] = useState<ParsedPreview | null>(null);
+  const [bankMetadata, setBankMetadata] = useState<BankMetadata | null>(null);
   const [importResult, setImportResult] = useState<{ imported: number; duplicates: number } | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -46,6 +57,7 @@ export function ImportModal({ open, onOpenChange, type, onImport }: ImportModalP
     setSelectedFile(null);
     setStep(1);
     setPreview(null);
+    setBankMetadata(null);
     setImportResult(null);
     setIsProcessing(false);
     setIsDragging(false);
@@ -149,6 +161,7 @@ export function ImportModal({ open, onOpenChange, type, onImport }: ImportModalP
     const sourceIdx = headers.findIndex(h => h === 'source');
     const debitIdx = headers.findIndex(h => h === 'debit');
     const creditIdx = headers.findIndex(h => h === 'credit');
+    const sequenceIdx = headers.findIndex(h => h === 'sequence');
     const refIdx = headers.findIndex(h => h === 'reference' || h === 'sequence');
 
     for (let i = headerRowIndex + 1; i < rows.length; i++) {
@@ -170,29 +183,73 @@ export function ImportModal({ open, onOpenChange, type, onImport }: ImportModalP
       const amount = credit > 0 ? credit : debit;
       const txType = credit > 0 ? 'credit' : 'debit';
 
+      const description = String(row[descIdx] || '').trim();
+      const source = sourceIdx >= 0 ? String(row[sourceIdx] || '').trim() : 'Unknown';
+      const sequence = sequenceIdx >= 0 ? String(row[sequenceIdx] || '').trim() : undefined;
+
+      // For Payment source, extract cheque number from description
+      // Pattern: "PAYEE NAME - CHEQNUM" (e.g., "HOUSE & GARDEN - 59271995")
+      let reference = refIdx >= 0 ? String(row[refIdx] || '').trim() : undefined;
+      if (source === 'Payment' && description.includes(' - ')) {
+        const lastDashIndex = description.lastIndexOf(' - ');
+        const potentialChequeNum = description.substring(lastDashIndex + 3).trim();
+        if (/^\d+$/.test(potentialChequeNum)) {
+          reference = potentialChequeNum;
+        }
+      }
+
       rawRows.push(row.map(cell => String(cell || '')));
 
       transactions.push({
         id: generateId('GL'),
         date: parseDate(String(row[dateIdx] || '')),
-        description: String(row[descIdx] || '').trim(),
+        description,
         amount,
         currency: 'EUR',
         type: txType,
-        reference: refIdx >= 0 ? String(row[refIdx] || '').trim() : undefined,
-        source: sourceIdx >= 0 ? String(row[sourceIdx] || '').trim() : 'Unknown',
+        reference: reference || undefined,
+        source,
+        sequence: sequence || undefined,
       });
     }
 
     return { transactions, headers: displayHeaders, rawRows, skipped };
   };
 
-  const parseBankCSV = async (file: File): Promise<{ transactions: BankTransaction[]; headers: string[]; rawRows: string[][]; skipped: number }> => {
+  const parseBankCSV = async (file: File): Promise<{ transactions: BankTransaction[]; headers: string[]; rawRows: string[][]; skipped: number; metadata: BankMetadata }> => {
     const text = await file.text();
     const lines = text.split('\n').filter(line => line.trim());
     const transactions: BankTransaction[] = [];
     const rawRows: string[][] = [];
     let skipped = 0;
+
+    // Parse metadata from the first rows (before the header row)
+    const metadata: BankMetadata = {};
+    for (let i = 0; i < Math.min(lines.length, 10); i++) {
+      const line = lines[i];
+      const lower = line.toLowerCase();
+
+      // Extract metadata fields from rows like "Account Number:,055511008246" or "Account Number: 055511008246"
+      if (lower.includes('account number')) {
+        const match = line.match(/account\s*number[:\s,]+(.+)/i);
+        if (match) metadata.accountNumber = match[1].replace(/,/g, '').trim();
+      } else if (lower.includes('account name')) {
+        const match = line.match(/account\s*name[:\s,]+(.+)/i);
+        if (match) metadata.accountName = match[1].replace(/,/g, '').trim();
+      } else if (lower.includes('account type')) {
+        const match = line.match(/account\s*type[:\s,]+(.+)/i);
+        if (match) metadata.accountType = match[1].replace(/,/g, '').trim();
+      } else if (lower.includes('currency')) {
+        const match = line.match(/currency[:\s,]+(.+)/i);
+        if (match) metadata.currency = match[1].replace(/,/g, '').trim();
+      } else if (lower.includes('from') && lower.includes('to')) {
+        const match = line.match(/from[:\s,]+(\S+)\s+to[:\s,]+(\S+)/i);
+        if (match) {
+          metadata.periodFrom = match[1].replace(/,/g, '').trim();
+          metadata.periodTo = match[2].replace(/,/g, '').trim();
+        }
+      }
+    }
 
     // Find header row
     let headerRowIndex = 0;
@@ -212,6 +269,14 @@ export function ImportModal({ open, onOpenChange, type, onImport }: ImportModalP
     const debitIdx = headers.findIndex(h => h === 'debit');
     const creditIdx = headers.findIndex(h => h === 'credit');
     const refIdx = headers.findIndex(h => h.includes('reference'));
+    const txTypeIdx = headers.findIndex(h => h === 'transaction type');
+    const refNumIdx = headers.findIndex(h => h === 'reference number');
+    const valueDateIdx = headers.findIndex(h => h === 'value date');
+    const balanceIdx = headers.findIndex(h => h === 'indicative balance');
+    const branchCodeIdx = headers.findIndex(h => h === 'branch code');
+    const bankRefIdx = headers.findIndex(h => h === 'bank reference number');
+
+    let lastBalance: number | undefined;
 
     for (let i = headerRowIndex + 1; i < lines.length; i++) {
       const values = parseCSVLine(lines[i]);
@@ -220,6 +285,12 @@ export function ImportModal({ open, onOpenChange, type, onImport }: ImportModalP
       const debit = parseEuropeanNumber(values[debitIdx] || '');
       const credit = parseEuropeanNumber(values[creditIdx] || '');
 
+      // Track the balance even for rows we skip
+      if (balanceIdx >= 0 && values[balanceIdx]) {
+        const parsedBal = parseEuropeanNumber(values[balanceIdx]);
+        if (parsedBal !== 0) lastBalance = parsedBal;
+      }
+
       if (debit === 0 && credit === 0) {
         skipped++;
         continue;
@@ -227,6 +298,9 @@ export function ImportModal({ open, onOpenChange, type, onImport }: ImportModalP
 
       const amount = credit > 0 ? credit : debit;
       const txType = credit > 0 ? 'credit' : 'debit';
+
+      const balance = balanceIdx >= 0 ? parseEuropeanNumber(values[balanceIdx] || '') : undefined;
+      if (balance && balance !== 0) lastBalance = balance;
 
       rawRows.push(values.map(v => v.trim()));
 
@@ -239,10 +313,20 @@ export function ImportModal({ open, onOpenChange, type, onImport }: ImportModalP
         type: txType,
         reference: refIdx >= 0 ? (values[refIdx] || '').trim() : undefined,
         bank_name: 'BOC',
+        transaction_type: txTypeIdx >= 0 ? (values[txTypeIdx] || '').trim() || undefined : undefined,
+        reference_number: refNumIdx >= 0 ? (values[refNumIdx] || '').trim() || undefined : (bankRefIdx >= 0 ? (values[bankRefIdx] || '').trim() || undefined : undefined),
+        value_date: valueDateIdx >= 0 && values[valueDateIdx] ? parseDate(values[valueDateIdx]) : undefined,
+        balance: balance && balance !== 0 ? balance : undefined,
+        branch_code: branchCodeIdx >= 0 ? (values[branchCodeIdx] || '').trim() || undefined : undefined,
       });
     }
 
-    return { transactions, headers: displayHeaders, rawRows, skipped };
+    // Set closing balance from last row
+    if (lastBalance !== undefined) {
+      metadata.closingBalance = lastBalance;
+    }
+
+    return { transactions, headers: displayHeaders, rawRows, skipped, metadata };
   };
 
   const handleNext = async () => {
@@ -255,7 +339,9 @@ export function ImportModal({ open, onOpenChange, type, onImport }: ImportModalP
       if (type === 'gl') {
         result = await parseGLExcel(selectedFile);
       } else {
-        result = await parseBankCSV(selectedFile);
+        const bankResult = await parseBankCSV(selectedFile);
+        result = bankResult;
+        setBankMetadata(bankResult.metadata);
       }
 
       if (result.transactions.length === 0) {
@@ -279,12 +365,26 @@ export function ImportModal({ open, onOpenChange, type, onImport }: ImportModalP
     }
   };
 
-  const handleImport = () => {
+  const handleImport = async () => {
     if (!preview) return;
 
     setIsProcessing(true);
     try {
       onImport(preview.transactions);
+
+      // If bank import, also send metadata to the API
+      if (type === 'bank' && bankMetadata) {
+        try {
+          await fetch('/api/bank-transactions/metadata', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(bankMetadata),
+          });
+        } catch (err) {
+          // Non-blocking: metadata POST is best-effort
+          console.warn('Failed to send bank metadata:', err);
+        }
+      }
 
       const duplicates = 0; // Duplicate detection happens in the parent; show 0 here as baseline
       setImportResult({ imported: preview.totalRows, duplicates });
@@ -447,6 +547,27 @@ export function ImportModal({ open, onOpenChange, type, onImport }: ImportModalP
                 <p className="text-sm font-medium text-foreground mt-1">{preview.headers.filter(h => h).join(', ')}</p>
               </div>
             </div>
+
+            {/* Bank metadata summary */}
+            {type === 'bank' && bankMetadata && (bankMetadata.accountNumber || bankMetadata.currency) && (
+              <div className="rounded-lg border border-primary/20 bg-primary/5 p-3">
+                <p className="text-xs font-medium text-primary mb-1">Account Metadata</p>
+                <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs text-muted-foreground">
+                  {bankMetadata.accountNumber && (
+                    <span>Account: {bankMetadata.accountNumber}</span>
+                  )}
+                  {bankMetadata.currency && (
+                    <span>Currency: {bankMetadata.currency}</span>
+                  )}
+                  {bankMetadata.periodFrom && bankMetadata.periodTo && (
+                    <span>Period: {bankMetadata.periodFrom} - {bankMetadata.periodTo}</span>
+                  )}
+                  {bankMetadata.closingBalance !== undefined && (
+                    <span>Closing Balance: {bankMetadata.closingBalance.toLocaleString('el-GR', { minimumFractionDigits: 2 })}</span>
+                  )}
+                </div>
+              </div>
+            )}
 
             {/* Preview table */}
             <div className="rounded-lg border border-border overflow-hidden">

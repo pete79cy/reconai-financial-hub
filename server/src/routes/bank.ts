@@ -64,9 +64,23 @@ router.post('/import', async (req: Request, res: Response) => {
 
       if (exists.rows.length === 0) {
         await client.query(
-          `INSERT INTO bank_transactions (id, date, description, amount, currency, type, reference, bank_name)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-          [tx.id, sanitizeDate(tx.date), tx.description, tx.amount, tx.currency || 'EUR', tx.type, tx.reference || null, tx.bank_name || 'BOC']
+          `INSERT INTO bank_transactions (id, date, description, amount, currency, type, reference, bank_name, transaction_type, reference_number, value_date, balance, branch_code)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
+          [
+            tx.id,
+            sanitizeDate(tx.date),
+            tx.description,
+            tx.amount,
+            tx.currency || 'EUR',
+            tx.type,
+            tx.reference || null,
+            tx.bank_name || 'BOC',
+            tx.transaction_type || null,
+            tx.reference_number || null,
+            tx.value_date ? sanitizeDate(tx.value_date) : null,
+            tx.balance != null ? tx.balance : null,
+            tx.branch_code || null,
+          ]
         );
         imported++;
       }
@@ -80,6 +94,44 @@ router.post('/import', async (req: Request, res: Response) => {
     res.status(500).json({ error: 'Failed to import bank transactions' });
   } finally {
     client.release();
+  }
+});
+
+// POST /api/bank-transactions/metadata
+router.post('/metadata', async (req: Request, res: Response) => {
+  const { account_number, account_holder, period_from, period_to, opening_balance, closing_balance } = req.body;
+
+  try {
+    const result = await pool.query(
+      `INSERT INTO bank_metadata (account_number, account_holder, period_from, period_to, opening_balance, closing_balance)
+       VALUES ($1, $2, $3, $4, $5, $6)
+       RETURNING *`,
+      [
+        account_number || null,
+        account_holder || null,
+        period_from ? sanitizeDate(period_from) : null,
+        period_to ? sanitizeDate(period_to) : null,
+        opening_balance != null ? opening_balance : null,
+        closing_balance != null ? closing_balance : null,
+      ]
+    );
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error('Error storing bank metadata:', err);
+    res.status(500).json({ error: 'Failed to store bank metadata' });
+  }
+});
+
+// GET /api/bank-transactions/metadata
+router.get('/metadata', async (_req: Request, res: Response) => {
+  try {
+    const result = await pool.query(
+      'SELECT * FROM bank_metadata ORDER BY created_at DESC LIMIT 1'
+    );
+    res.json(result.rows[0] || null);
+  } catch (err) {
+    console.error('Error fetching bank metadata:', err);
+    res.status(500).json({ error: 'Failed to fetch bank metadata' });
   }
 });
 

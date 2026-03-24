@@ -13,6 +13,11 @@ export interface BankTransaction {
   type: 'debit' | 'credit';
   reference?: string;
   bank_name: BankName;
+  transaction_type?: string;       // e.g., 'Cheque', 'BOC Transfer', 'Card Purchase'
+  reference_number?: string;       // cheque number or bank ref
+  value_date?: string;
+  balance?: number;
+  branch_code?: string;
 }
 
 export interface GLTransaction {
@@ -24,6 +29,7 @@ export interface GLTransaction {
   type: 'debit' | 'credit';
   reference?: string;
   source: string; // e.g., "Expense BOCY", "Deposit", "Payment"
+  sequence?: string; // e.g., 'AT253.359'
 }
 
 export interface MatchedTransaction {
@@ -41,6 +47,7 @@ export interface MatchedTransaction {
   flags?: string[];
   bank_tx_id?: string;
   gl_tx_id?: string;
+  match_category?: 'cheque' | 'deposit' | 'other';
 }
 
 // Legacy alias for backward compatibility

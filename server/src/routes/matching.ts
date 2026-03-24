@@ -18,6 +18,11 @@ interface BankRow {
   amount: string;
   type: string;
   bank_name: string;
+  transaction_type: string | null;
+  reference_number: string | null;
+  value_date: string | null;
+  balance: string | null;
+  branch_code: string | null;
 }
 
 interface GLRow {
@@ -27,6 +32,7 @@ interface GLRow {
   amount: string;
   type: string;
   source: string;
+  sequence: string | null;
 }
 
 function isWeekend(dateStr: string): boolean {
@@ -34,7 +40,34 @@ function isWeekend(dateStr: string): boolean {
   return day === 0 || day === 6;
 }
 
-// POST /api/matching/run - run auto-match algorithm
+/**
+ * Extract a reference/cheque number from a GL description.
+ * GL descriptions look like "HOUSE & GARDEN - 59271995"
+ * We extract the number after the last " - "
+ */
+function extractGLChequeNumber(description: string): string | null {
+  const parts = description.split(' - ');
+  if (parts.length >= 2) {
+    const last = parts[parts.length - 1].trim();
+    // Check if it looks like a number (digits, possibly with spaces)
+    const cleaned = last.replace(/\s/g, '');
+    if (/^\d+$/.test(cleaned)) {
+      return cleaned;
+    }
+  }
+  return null;
+}
+
+/**
+ * Check if a GL description contains a given reference number
+ */
+function glDescriptionContainsRef(glDesc: string, refNumber: string): boolean {
+  if (!refNumber || !glDesc) return false;
+  const cleaned = refNumber.replace(/\s/g, '');
+  return glDesc.replace(/\s/g, '').includes(cleaned);
+}
+
+// POST /api/matching/run - run 3-pass auto-match algorithm
 router.post('/run', async (_req: Request, res: Response) => {
   const client = await pool.connect();
   try {
@@ -58,7 +91,170 @@ router.post('/run', async (_req: Request, res: Response) => {
     const usedGLIds = new Set<string>();
     const matches: any[] = [];
 
-    // Match bank transactions to GL transactions
+    // ============================================================
+    // PASS 1: Cheques (exact match by reference number)
+    // ============================================================
+    const chequeBankTxs = bankTxs.filter(bt =>
+      bt.transaction_type &&
+      (bt.transaction_type.toLowerCase().includes('cheque') ||
+       bt.transaction_type.toLowerCase().includes('check'))
+    );
+
+    const paymentGLTxs = glTxs.filter(gl =>
+      gl.source && gl.source.toLowerCase().includes('payment')
+    );
+
+    for (const bankTx of chequeBankTxs) {
+      if (usedBankIds.has(bankTx.id)) continue;
+      if (!bankTx.reference_number) continue;
+
+      const bankRef = bankTx.reference_number.replace(/\s/g, '');
+      let bestMatch: GLRow | null = null;
+      let bestConfidence = 0;
+
+      for (const glTx of paymentGLTxs) {
+        if (usedGLIds.has(glTx.id)) continue;
+
+        const glChequeNum = extractGLChequeNumber(glTx.description);
+        const refMatchByChequeNum = glChequeNum && glChequeNum === bankRef;
+        const refMatchByContains = glDescriptionContainsRef(glTx.description, bankRef);
+
+        if (refMatchByChequeNum || refMatchByContains) {
+          const bankAmount = parseFloat(bankTx.amount);
+          const glAmount = parseFloat(glTx.amount);
+          const amountDiff = Math.abs(bankAmount - glAmount);
+
+          let confidence: number;
+          if (amountDiff < 0.01) {
+            confidence = 100;
+          } else {
+            confidence = 90;
+          }
+
+          if (confidence > bestConfidence) {
+            bestConfidence = confidence;
+            bestMatch = glTx;
+          }
+        }
+      }
+
+      if (bestMatch) {
+        usedBankIds.add(bankTx.id);
+        usedGLIds.add(bestMatch.id);
+
+        const amount = parseFloat(bankTx.amount);
+        const flags: string[] = [];
+        if (rules.high_value && amount > HIGH_VALUE_THRESHOLD) flags.push('High Value');
+        if (rules.weekend_alert && isWeekend(bankTx.date)) flags.push('Weekend');
+
+        matches.push({
+          id: generateId('MATCH'),
+          date: bankTx.date,
+          bank_desc: bankTx.description,
+          gl_desc: bestMatch.description,
+          amount,
+          currency: 'EUR',
+          bank_name: bankTx.bank_name || 'BOC',
+          match_type: '1:1',
+          confidence: bestConfidence,
+          status: 'matched',
+          approval_stage: 'none',
+          flags,
+          bank_tx_id: bankTx.id,
+          gl_tx_id: bestMatch.id,
+          match_category: 'cheque',
+        });
+      }
+    }
+
+    // ============================================================
+    // PASS 2: Deposits (match by amount + date)
+    // ============================================================
+    const depositBankTxs = bankTxs.filter(bt => {
+      if (usedBankIds.has(bt.id)) return false;
+      if (bt.type !== 'credit') return false;
+      const tt = (bt.transaction_type || '').toLowerCase();
+      return tt.includes('deposit') || tt.includes('jcc') || tt.includes('credit') || tt.includes('transfer');
+    });
+
+    const depositGLTxs = glTxs.filter(gl => {
+      if (usedGLIds.has(gl.id)) return false;
+      if (gl.type !== 'debit') return false;
+      const src = (gl.source || '').toLowerCase();
+      return src.includes('deposit') || src.includes('receipt');
+    });
+
+    for (const bankTx of depositBankTxs) {
+      if (usedBankIds.has(bankTx.id)) continue;
+
+      const bankAmount = parseFloat(bankTx.amount);
+      const bankDate = new Date(bankTx.date);
+      let bestMatch: GLRow | null = null;
+      let bestConfidence = 0;
+
+      for (const glTx of depositGLTxs) {
+        if (usedGLIds.has(glTx.id)) continue;
+
+        const glAmount = parseFloat(glTx.amount);
+        const amountDiff = Math.abs(bankAmount - glAmount);
+
+        // Must be exact amount match
+        if (amountDiff >= 0.01) continue;
+
+        const glDate = new Date(glTx.date);
+        const daysDiff = Math.abs((bankDate.getTime() - glDate.getTime()) / (1000 * 60 * 60 * 24));
+
+        if (daysDiff > 5) continue;
+
+        let confidence: number;
+        if (daysDiff < 1) {
+          confidence = 98;
+        } else if (daysDiff <= 1) {
+          confidence = 90;
+        } else if (daysDiff <= 3) {
+          confidence = 80;
+        } else {
+          confidence = 70;
+        }
+
+        if (confidence > bestConfidence) {
+          bestConfidence = confidence;
+          bestMatch = glTx;
+        }
+      }
+
+      if (bestMatch) {
+        usedBankIds.add(bankTx.id);
+        usedGLIds.add(bestMatch.id);
+
+        const amount = bankAmount;
+        const flags: string[] = [];
+        if (rules.high_value && amount > HIGH_VALUE_THRESHOLD) flags.push('High Value');
+        if (rules.weekend_alert && isWeekend(bankTx.date)) flags.push('Weekend');
+
+        matches.push({
+          id: generateId('MATCH'),
+          date: bankTx.date,
+          bank_desc: bankTx.description,
+          gl_desc: bestMatch.description,
+          amount,
+          currency: 'EUR',
+          bank_name: bankTx.bank_name || 'BOC',
+          match_type: '1:1',
+          confidence: bestConfidence,
+          status: 'matched',
+          approval_stage: 'none',
+          flags,
+          bank_tx_id: bankTx.id,
+          gl_tx_id: bestMatch.id,
+          match_category: 'deposit',
+        });
+      }
+    }
+
+    // ============================================================
+    // PASS 3: Fuzzy match (all remaining unmatched)
+    // ============================================================
     for (const bankTx of bankTxs) {
       if (usedBankIds.has(bankTx.id)) continue;
 
@@ -110,6 +306,7 @@ router.post('/run', async (_req: Request, res: Response) => {
           flags,
           bank_tx_id: bankTx.id,
           gl_tx_id: bestMatch.id,
+          match_category: 'other',
         });
       }
     }
@@ -137,6 +334,7 @@ router.post('/run', async (_req: Request, res: Response) => {
           flags,
           bank_tx_id: bankTx.id,
           gl_tx_id: null,
+          match_category: null,
         });
       }
     }
@@ -164,6 +362,7 @@ router.post('/run', async (_req: Request, res: Response) => {
           flags,
           bank_tx_id: null,
           gl_tx_id: glTx.id,
+          match_category: null,
         });
       }
     }
@@ -172,9 +371,9 @@ router.post('/run', async (_req: Request, res: Response) => {
     for (const m of matches) {
       await client.query(
         `INSERT INTO matched_transactions
-         (id, date, bank_desc, gl_desc, amount, currency, bank_name, match_type, confidence, status, approval_stage, flags, bank_tx_id, gl_tx_id)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
-        [m.id, m.date, m.bank_desc, m.gl_desc, m.amount, m.currency, m.bank_name, m.match_type, m.confidence, m.status, m.approval_stage, m.flags, m.bank_tx_id, m.gl_tx_id]
+         (id, date, bank_desc, gl_desc, amount, currency, bank_name, match_type, confidence, status, approval_stage, flags, bank_tx_id, gl_tx_id, match_category)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)`,
+        [m.id, m.date, m.bank_desc, m.gl_desc, m.amount, m.currency, m.bank_name, m.match_type, m.confidence, m.status, m.approval_stage, m.flags, m.bank_tx_id, m.gl_tx_id, m.match_category || null]
       );
     }
 

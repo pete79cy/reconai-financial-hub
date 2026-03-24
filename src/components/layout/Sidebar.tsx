@@ -3,6 +3,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import {
   LayoutDashboard,
   GitCompare,
+  Scale,
   Settings,
   CheckCircle,
   ChevronLeft,
@@ -18,6 +19,7 @@ interface SidebarProps {
 
 const navItems = [
   { to: '/', icon: LayoutDashboard, label: 'Dashboard' },
+  { to: '/reconciliation', icon: Scale, label: 'Reconciliation' },
   { to: '/matching', icon: GitCompare, label: 'Matching' },
   { to: '/rules', icon: Settings, label: 'Rules Engine' },
   { to: '/approvals', icon: CheckCircle, label: 'Approvals' },

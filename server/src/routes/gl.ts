@@ -64,9 +64,19 @@ router.post('/import', async (req: Request, res: Response) => {
 
       if (exists.rows.length === 0) {
         await client.query(
-          `INSERT INTO gl_transactions (id, date, description, amount, currency, type, reference, source)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-          [tx.id, sanitizeDate(tx.date), tx.description, tx.amount, tx.currency || 'EUR', tx.type, tx.reference || null, tx.source || 'Unknown']
+          `INSERT INTO gl_transactions (id, date, description, amount, currency, type, reference, source, sequence)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+          [
+            tx.id,
+            sanitizeDate(tx.date),
+            tx.description,
+            tx.amount,
+            tx.currency || 'EUR',
+            tx.type,
+            tx.reference || null,
+            tx.source || 'Unknown',
+            tx.sequence || null,
+          ]
         );
         imported++;
       }

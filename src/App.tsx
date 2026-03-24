@@ -7,6 +7,7 @@ import { ErrorBoundary } from "./components/ErrorBoundary";
 import { AppLayout } from "./components/layout/AppLayout";
 import Dashboard from "./pages/Dashboard";
 import Matching from "./pages/Matching";
+import Reconciliation from "./pages/Reconciliation";
 import Rules from "./pages/Rules";
 import Approvals from "./pages/Approvals";
 import NotFound from "./pages/NotFound";
@@ -34,6 +35,7 @@ const App = () => (
               <Route element={<AppLayout />}>
                 <Route path="/" element={<Dashboard />} />
                 <Route path="/matching" element={<Matching />} />
+                <Route path="/reconciliation" element={<Reconciliation />} />
                 <Route path="/rules" element={<Rules />} />
                 <Route path="/approvals" element={<Approvals />} />
               </Route>
