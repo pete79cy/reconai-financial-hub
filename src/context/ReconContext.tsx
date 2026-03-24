@@ -7,103 +7,55 @@ import {
   ReconContextType,
   Status,
   ApprovalStage,
-  INITIAL_TRANSACTIONS
 } from '@/types/transaction';
-import { calculateConfidence } from '@/utils/reconciliation';
-import {
-  CONFIDENCE_AUTO_MATCH_MIN,
-  CONFIDENCE_HIGH,
-  CONFIDENCE_MEDIUM,
-  HIGH_VALUE_THRESHOLD,
-} from '@/utils/constants';
-import { generateId } from '@/utils/id';
 
-const STORAGE_KEY = 'reconai_transactions';
-const BANK_STORAGE_KEY = 'reconai_bank_transactions';
-const GL_STORAGE_KEY = 'reconai_gl_transactions';
-const RULES_KEY = 'reconai_rules';
+const API_BASE = '/api';
 
 const ReconContext = createContext<ReconContextType | undefined>(undefined);
 
-function loadTransactions(): Transaction[] {
-  try {
-    const stored = localStorage.getItem(STORAGE_KEY);
-    if (stored) {
-      return JSON.parse(stored);
-    }
-  } catch (e) {
-    console.error('Failed to load transactions:', e);
+async function apiFetch<T>(path: string, options?: RequestInit): Promise<T> {
+  const res = await fetch(`${API_BASE}${path}`, {
+    headers: { 'Content-Type': 'application/json' },
+    ...options,
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: 'Request failed' }));
+    throw new Error(err.error || `HTTP ${res.status}`);
   }
-  return INITIAL_TRANSACTIONS;
-}
-
-function loadBankTransactions(): BankTransaction[] {
-  try {
-    const stored = localStorage.getItem(BANK_STORAGE_KEY);
-    if (stored) {
-      return JSON.parse(stored);
-    }
-  } catch (e) {
-    console.error('Failed to load bank transactions:', e);
-  }
-  return [];
-}
-
-function loadGLTransactions(): GLTransaction[] {
-  try {
-    const stored = localStorage.getItem(GL_STORAGE_KEY);
-    if (stored) {
-      return JSON.parse(stored);
-    }
-  } catch (e) {
-    console.error('Failed to load GL transactions:', e);
-  }
-  return [];
-}
-
-function loadRules(): RulesState {
-  try {
-    const stored = localStorage.getItem(RULES_KEY);
-    if (stored) {
-      return JSON.parse(stored);
-    }
-  } catch (e) {
-    console.error('Failed to load rules:', e);
-  }
-  return { weekendAlert: true, highValue: true };
-}
-
-function saveTransactions(transactions: Transaction[]) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(transactions));
-}
-
-function saveBankTransactions(transactions: BankTransaction[]) {
-  localStorage.setItem(BANK_STORAGE_KEY, JSON.stringify(transactions));
-}
-
-function saveGLTransactions(transactions: GLTransaction[]) {
-  localStorage.setItem(GL_STORAGE_KEY, JSON.stringify(transactions));
-}
-
-function saveRules(rules: RulesState) {
-  localStorage.setItem(RULES_KEY, JSON.stringify(rules));
-}
-
-function isWeekend(dateStr: string): boolean {
-  const day = new Date(dateStr).getDay();
-  return day === 0 || day === 6;
-}
-
-function isHighValue(amount: number): boolean {
-  return amount > HIGH_VALUE_THRESHOLD;
+  return res.json();
 }
 
 export function ReconProvider({ children }: { children: React.ReactNode }) {
-  const [transactions, setTransactions] = useState<Transaction[]>(loadTransactions);
-  const [bankTransactions, setBankTransactions] = useState<BankTransaction[]>(loadBankTransactions);
-  const [glTransactions, setGLTransactions] = useState<GLTransaction[]>(loadGLTransactions);
-  const [rulesState, setRulesState] = useState<RulesState>(loadRules);
+  const [transactions, setTransactions] = useState<Transaction[]>([]);
+  const [bankTransactions, setBankTransactions] = useState<BankTransaction[]>([]);
+  const [glTransactions, setGLTransactions] = useState<GLTransaction[]>([]);
+  const [rulesState, setRulesState] = useState<RulesState>({ weekendAlert: true, highValue: true });
   const [searchQuery, setSearchQuery] = useState('');
+  const [loading, setLoading] = useState(true);
+
+  // Fetch all data from API on mount
+  useEffect(() => {
+    async function loadAll() {
+      try {
+        const [txs, bankTxs, glTxs, rules] = await Promise.all([
+          apiFetch<Transaction[]>('/transactions'),
+          apiFetch<BankTransaction[]>('/bank-transactions'),
+          apiFetch<GLTransaction[]>('/gl-transactions'),
+          apiFetch<RulesState>('/rules'),
+        ]);
+        setTransactions(txs);
+        setBankTransactions(bankTxs);
+        setGLTransactions(glTxs);
+        setRulesState(rules);
+      } catch (err) {
+        console.error('Failed to load data from API:', err);
+        // Fallback: start with empty state
+      } finally {
+        setLoading(false);
+      }
+    }
+    loadAll();
+  }, []);
 
   // Filtered transactions based on search query
   const filteredTransactions = useMemo(() => {
@@ -120,202 +72,126 @@ export function ReconProvider({ children }: { children: React.ReactNode }) {
   }, [transactions, searchQuery]);
 
   const recalculateFlags = useCallback(() => {
-    setTransactions(prev => {
-      const updated = prev.map(tx => {
-        const flags: string[] = [];
+    // Flags are now calculated server-side during matching and rule updates
+  }, []);
 
-        if (rulesState.highValue && isHighValue(tx.amount)) {
-          flags.push('High Value');
-        }
-
-        if (rulesState.weekendAlert && isWeekend(tx.date)) {
-          flags.push('Weekend');
-        }
-
-        return { ...tx, flags };
+  const updateStatus = useCallback(async (id: string, newStatus: Status) => {
+    try {
+      await apiFetch(`/transactions/${id}/status`, {
+        method: 'PATCH',
+        body: JSON.stringify({ status: newStatus }),
       });
+      setTransactions(prev => prev.map(tx =>
+        tx.id === id ? { ...tx, status: newStatus } : tx
+      ));
+    } catch (err) {
+      console.error('Failed to update status:', err);
+    }
+  }, []);
 
-      saveTransactions(updated);
-      return updated;
-    });
+  const updateApprovalStage = useCallback(async (id: string, newStage: ApprovalStage) => {
+    try {
+      await apiFetch(`/transactions/${id}/approval`, {
+        method: 'PATCH',
+        body: JSON.stringify({ approval_stage: newStage }),
+      });
+      setTransactions(prev => prev.map(tx =>
+        tx.id === id ? { ...tx, approval_stage: newStage } : tx
+      ));
+    } catch (err) {
+      console.error('Failed to update approval stage:', err);
+    }
+  }, []);
+
+  const toggleRule = useCallback(async (ruleKey: keyof RulesState) => {
+    const newValue = !rulesState[ruleKey];
+    const update = { [ruleKey]: newValue };
+    try {
+      const result = await apiFetch<RulesState>('/rules', {
+        method: 'PATCH',
+        body: JSON.stringify(update),
+      });
+      setRulesState(result);
+      // Reload transactions to get updated flags
+      const txs = await apiFetch<Transaction[]>('/transactions');
+      setTransactions(txs);
+    } catch (err) {
+      console.error('Failed to toggle rule:', err);
+    }
   }, [rulesState]);
 
-  // Recalculate flags when rules change
-  useEffect(() => {
-    recalculateFlags();
-  }, [rulesState, recalculateFlags]);
-
-  const updateStatus = useCallback((id: string, newStatus: Status) => {
-    setTransactions(prev => {
-      const updated = prev.map(tx =>
-        tx.id === id ? { ...tx, status: newStatus } : tx
-      );
-      saveTransactions(updated);
-      return updated;
-    });
-  }, []);
-
-  const updateApprovalStage = useCallback((id: string, newStage: ApprovalStage) => {
-    setTransactions(prev => {
-      const updated = prev.map(tx =>
-        tx.id === id ? { ...tx, approval_stage: newStage } : tx
-      );
-      saveTransactions(updated);
-      return updated;
-    });
-  }, []);
-
-  const toggleRule = useCallback((ruleKey: keyof RulesState) => {
-    setRulesState(prev => {
-      const updated = { ...prev, [ruleKey]: !prev[ruleKey] };
-      saveRules(updated);
-      return updated;
-    });
-  }, []);
-
   const importTransactions = useCallback((newTransactions: Transaction[]) => {
-    setTransactions(prev => {
-      const updated = [...prev, ...newTransactions];
-      saveTransactions(updated);
-      return updated;
-    });
+    setTransactions(prev => [...prev, ...newTransactions]);
   }, []);
 
-  const importBankTransactions = useCallback((txs: BankTransaction[]) => {
-    setBankTransactions(prev => {
-      // Duplicate detection: skip transactions with same amount+date+description
-      const existingKeys = new Set(prev.map(t => `${t.date}|${t.amount}|${t.description}`));
-      const newTxs = txs.filter(t => !existingKeys.has(`${t.date}|${t.amount}|${t.description}`));
-      const updated = [...prev, ...newTxs];
-      saveBankTransactions(updated);
-      return updated;
-    });
-  }, []);
-
-  const importGLTransactions = useCallback((txs: GLTransaction[]) => {
-    setGLTransactions(prev => {
-      // Duplicate detection: skip transactions with same amount+date+description
-      const existingKeys = new Set(prev.map(t => `${t.date}|${t.amount}|${t.description}`));
-      const newTxs = txs.filter(t => !existingKeys.has(`${t.date}|${t.amount}|${t.description}`));
-      const updated = [...prev, ...newTxs];
-      saveGLTransactions(updated);
-      return updated;
-    });
-  }, []);
-
-  const runAutoMatch = useCallback(() => {
-    const usedBankIds = new Set<string>();
-    const usedGLIds = new Set<string>();
-    const newMatches: Transaction[] = [];
-
-    // Match bank transactions to GL transactions
-    for (const bankTx of bankTransactions) {
-      if (usedBankIds.has(bankTx.id)) continue;
-
-      let bestMatch: GLTransaction | null = null;
-      let bestConfidence = 0;
-
-      for (const glTx of glTransactions) {
-        if (usedGLIds.has(glTx.id)) continue;
-
-        // Bank and GL types are mirrored in reconciliation:
-        // Bank debit (money out) = GL credit (decrease in asset)
-        // Bank credit (money in) = GL debit (increase in asset)
-        if (bankTx.type === glTx.type) continue;
-
-        const confidence = calculateConfidence(
-          bankTx.amount,
-          glTx.amount,
-          bankTx.description,
-          glTx.description
-        );
-
-        if (confidence > bestConfidence && confidence >= CONFIDENCE_AUTO_MATCH_MIN) {
-          bestConfidence = confidence;
-          bestMatch = glTx;
-        }
-      }
-
-      if (bestMatch) {
-        usedBankIds.add(bankTx.id);
-        usedGLIds.add(bestMatch.id);
-
-        newMatches.push({
-          id: generateId('MATCH'),
-          date: bankTx.date,
-          bank_desc: bankTx.description,
-          gl_desc: bestMatch.description,
-          amount: bankTx.amount,
-          currency: 'EUR',
-          bank_name: bankTx.bank_name,
-          match_type: bestConfidence >= CONFIDENCE_HIGH ? '1:1' : 'Manual',
-          confidence: bestConfidence,
-          status: bestConfidence >= CONFIDENCE_MEDIUM ? 'matched' : 'pending',
-          approval_stage: 'none',
-          bank_tx_id: bankTx.id,
-          gl_tx_id: bestMatch.id,
-        });
-      }
-    }
-
-    // Add unmatched bank transactions
-    for (const bankTx of bankTransactions) {
-      if (!usedBankIds.has(bankTx.id)) {
-        newMatches.push({
-          id: generateId('UNMATCHED-BANK'),
-          date: bankTx.date,
-          bank_desc: bankTx.description,
-          gl_desc: '',
-          amount: bankTx.amount,
-          currency: 'EUR',
-          bank_name: bankTx.bank_name,
-          match_type: 'Manual',
-          confidence: 0,
-          status: 'unmatched',
-          approval_stage: 'none',
-          bank_tx_id: bankTx.id,
-        });
-      }
-    }
-
-    // Add unmatched GL transactions
-    for (const glTx of glTransactions) {
-      if (!usedGLIds.has(glTx.id)) {
-        newMatches.push({
-          id: generateId('UNMATCHED-GL'),
-          date: glTx.date,
-          bank_desc: '',
-          gl_desc: glTx.description,
-          amount: glTx.amount,
-          currency: 'EUR',
-          bank_name: 'BOC',
-          match_type: 'Manual',
-          confidence: 0,
-          status: 'unmatched',
-          approval_stage: 'none',
-          gl_tx_id: glTx.id,
-        });
-      }
-    }
-
-    if (newMatches.length > 0) {
-      setTransactions(prev => {
-        const updated = [...prev, ...newMatches];
-        saveTransactions(updated);
-        return updated;
+  const importBankTransactions = useCallback(async (txs: BankTransaction[]) => {
+    try {
+      const result = await apiFetch<{ imported: number }>('/bank-transactions/import', {
+        method: 'POST',
+        body: JSON.stringify({ transactions: txs }),
       });
+      // Reload bank transactions from server
+      const updated = await apiFetch<BankTransaction[]>('/bank-transactions');
+      setBankTransactions(updated);
+      return result;
+    } catch (err) {
+      console.error('Failed to import bank transactions:', err);
+      throw err;
     }
-
-  }, [bankTransactions, glTransactions]);
-
-  const clearAllData = useCallback(() => {
-    setTransactions(INITIAL_TRANSACTIONS);
-    setBankTransactions([]);
-    setGLTransactions([]);
-    saveTransactions(INITIAL_TRANSACTIONS);
-    saveBankTransactions([]);
-    saveGLTransactions([]);
   }, []);
+
+  const importGLTransactions = useCallback(async (txs: GLTransaction[]) => {
+    try {
+      const result = await apiFetch<{ imported: number }>('/gl-transactions/import', {
+        method: 'POST',
+        body: JSON.stringify({ transactions: txs }),
+      });
+      // Reload GL transactions from server
+      const updated = await apiFetch<GLTransaction[]>('/gl-transactions');
+      setGLTransactions(updated);
+      return result;
+    } catch (err) {
+      console.error('Failed to import GL transactions:', err);
+      throw err;
+    }
+  }, []);
+
+  const runAutoMatch = useCallback(async () => {
+    try {
+      const result = await apiFetch<{ transactions: Transaction[] }>('/matching/run', {
+        method: 'POST',
+      });
+      setTransactions(result.transactions);
+    } catch (err) {
+      console.error('Failed to run auto-match:', err);
+    }
+  }, []);
+
+  const clearAllData = useCallback(async () => {
+    try {
+      await Promise.all([
+        apiFetch('/transactions', { method: 'DELETE' }),
+        apiFetch('/bank-transactions', { method: 'DELETE' }),
+        apiFetch('/gl-transactions', { method: 'DELETE' }),
+      ]);
+      setTransactions([]);
+      setBankTransactions([]);
+      setGLTransactions([]);
+    } catch (err) {
+      console.error('Failed to clear data:', err);
+    }
+  }, []);
+
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-background flex items-center justify-center">
+        <div className="text-center">
+          <div className="w-8 h-8 border-2 border-primary border-t-transparent rounded-full animate-spin mx-auto mb-4" />
+          <p className="text-muted-foreground">Loading data...</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <ReconContext.Provider value={{

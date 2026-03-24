@@ -1,7 +1,29 @@
 services:
-  reconai:
+  frontend:
     build: .
     container_name: reconai-financial-hub
     ports:
       - "3000:3000"
+    depends_on:
+      - backend
     restart: unless-stopped
+    networks:
+      - reconai
+
+  backend:
+    build: ./server
+    container_name: reconai-backend
+    environment:
+      - DATABASE_URL=postgresql://MbELlVpssTiWnG32:QsLYt3xY563h1DrgJlmxMy6vBfsGKOXY@postgresql:5432/LJVtsBRb1UVXidr9
+      - PORT=4000
+    restart: unless-stopped
+    networks:
+      - reconai
+      - pg-net
+
+networks:
+  reconai:
+    driver: bridge
+  pg-net:
+    external: true
+    name: postgresql-dere_default
