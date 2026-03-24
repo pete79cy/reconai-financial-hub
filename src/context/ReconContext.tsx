@@ -218,8 +218,10 @@ export function ReconProvider({ children }: { children: React.ReactNode }) {
       for (const glTx of glTransactions) {
         if (usedGLIds.has(glTx.id)) continue;
 
-        // Must be same type (debit/credit)
-        if (bankTx.type !== glTx.type) continue;
+        // Bank and GL types are mirrored in reconciliation:
+        // Bank debit (money out) = GL credit (decrease in asset)
+        // Bank credit (money in) = GL debit (increase in asset)
+        if (bankTx.type === glTx.type) continue;
 
         const confidence = calculateConfidence(
           bankTx.amount,
