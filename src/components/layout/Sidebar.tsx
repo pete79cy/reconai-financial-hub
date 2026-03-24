@@ -1,14 +1,13 @@
 import { NavLink, useLocation } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
-import { 
-  LayoutDashboard, 
-  GitCompare, 
-  Settings, 
-  Shield, 
+import {
+  LayoutDashboard,
+  GitCompare,
+  Settings,
   CheckCircle,
   ChevronLeft,
   ChevronRight,
-  Zap
+  Zap,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
@@ -30,18 +29,18 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
   return (
     <motion.aside
       initial={false}
-      animate={{ width: collapsed ? 72 : 256 }}
+      animate={{ width: collapsed ? 72 : 240 }}
       transition={{ duration: 0.3, ease: 'easeInOut' }}
       className="fixed left-0 top-0 h-screen bg-card border-r border-border flex flex-col z-50"
     >
       {/* Logo */}
       <div className="h-16 flex items-center px-4 border-b border-border">
-        <motion.div 
+        <motion.div
           className="flex items-center gap-3"
           animate={{ justifyContent: collapsed ? 'center' : 'flex-start' }}
         >
-          <div className="w-10 h-10 rounded-lg bg-primary/10 flex items-center justify-center glow-teal">
-            <Zap className="w-5 h-5 text-primary" />
+          <div className="w-9 h-9 rounded-lg bg-primary/10 flex items-center justify-center">
+            <Zap className="w-[18px] h-[18px] text-primary" />
           </div>
           <AnimatePresence>
             {!collapsed && (
@@ -51,8 +50,12 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
                 exit={{ opacity: 0, x: -10 }}
                 transition={{ duration: 0.2 }}
               >
-                <h1 className="text-lg font-semibold text-foreground">ReconAI</h1>
-                <p className="text-xs text-muted-foreground">Financial Platform</p>
+                <h1 className="text-base font-semibold text-foreground leading-tight">
+                  ReconAI
+                </h1>
+                <p className="text-[11px] text-muted-foreground leading-tight">
+                  Financial Platform
+                </p>
               </motion.div>
             )}
           </AnimatePresence>
@@ -60,26 +63,37 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
       </div>
 
       {/* Navigation */}
-      <nav className="flex-1 py-4 px-3 space-y-1">
+      <nav className="flex-1 py-3 px-2 space-y-0.5">
         {navItems.map((item) => {
           const isActive = location.pathname === item.to;
-          
+
           return (
             <NavLink
               key={item.to}
               to={item.to}
               className={cn(
-                'flex items-center gap-3 px-3 py-2.5 rounded-lg transition-all duration-200',
+                'relative flex items-center gap-3 px-3 py-2 rounded-lg transition-all duration-200',
                 'hover:bg-secondary/80',
-                isActive 
-                  ? 'bg-primary/10 text-primary' 
+                isActive
+                  ? 'text-foreground'
                   : 'text-muted-foreground hover:text-foreground'
               )}
             >
-              <item.icon className={cn(
-                'w-5 h-5 flex-shrink-0',
-                isActive && 'text-primary'
-              )} />
+              {/* Active pill indicator */}
+              {isActive && (
+                <motion.div
+                  layoutId="sidebar-active-pill"
+                  className="absolute left-0 top-1/2 -translate-y-1/2 w-[3px] h-6 rounded-full bg-primary"
+                  transition={{ type: 'spring', stiffness: 350, damping: 30 }}
+                />
+              )}
+
+              <item.icon
+                className={cn(
+                  'w-[18px] h-[18px] flex-shrink-0',
+                  isActive && 'text-primary'
+                )}
+              />
               <AnimatePresence>
                 {!collapsed && (
                   <motion.span
@@ -87,7 +101,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
                     animate={{ opacity: 1, x: 0 }}
                     exit={{ opacity: 0, x: -10 }}
                     transition={{ duration: 0.2 }}
-                    className="font-medium"
+                    className="text-sm font-medium"
                   >
                     {item.label}
                   </motion.span>
@@ -98,27 +112,29 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
         })}
       </nav>
 
-      {/* Security Badge */}
-      <div className="px-3 pb-4">
-        <div className={cn(
-          'flex items-center gap-3 px-3 py-2.5 rounded-lg',
-          'bg-secondary/50 border border-border'
-        )}>
-          <Shield className="w-5 h-5 text-primary flex-shrink-0" />
-          <AnimatePresence>
-            {!collapsed && (
-              <motion.div
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                exit={{ opacity: 0 }}
-                className="text-xs"
-              >
-                <p className="text-foreground font-medium">Bank-Grade Security</p>
-                <p className="text-muted-foreground">256-bit Encryption</p>
-              </motion.div>
-            )}
-          </AnimatePresence>
-        </div>
+      {/* Version number */}
+      <div className="px-3 pb-3">
+        <AnimatePresence>
+          {!collapsed ? (
+            <motion.p
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="text-[11px] text-muted-foreground/50 text-center"
+            >
+              v1.0
+            </motion.p>
+          ) : (
+            <motion.p
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="text-[10px] text-muted-foreground/50 text-center"
+            >
+              1.0
+            </motion.p>
+          )}
+        </AnimatePresence>
       </div>
 
       {/* Toggle Button */}
@@ -133,9 +149,9 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
         )}
       >
         {collapsed ? (
-          <ChevronRight className="w-4 h-4" />
+          <ChevronRight className="w-3.5 h-3.5" />
         ) : (
-          <ChevronLeft className="w-4 h-4" />
+          <ChevronLeft className="w-3.5 h-3.5" />
         )}
       </button>
     </motion.aside>

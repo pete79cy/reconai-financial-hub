@@ -12,30 +12,44 @@ interface RingChartProps {
 }
 
 const colorMap = {
-  teal: 'hsl(165, 100%, 42%)',
+  teal: 'hsl(165, 82%, 42%)',
   blue: 'hsl(217, 91%, 60%)',
   warn: 'hsl(38, 92%, 50%)',
   error: 'hsl(0, 84%, 60%)',
 };
 
+const colorLabelMap = {
+  teal: 'text-primary',
+  blue: 'text-brand-blue',
+  warn: 'text-status-warn',
+  error: 'text-status-error',
+};
+
+const colorNameMap = {
+  teal: 'Matched',
+  blue: 'Active',
+  warn: 'Pending',
+  error: 'Flagged',
+};
+
 const glowMap = {
-  teal: 'drop-shadow(0 0 8px hsl(165 100% 42% / 0.5))',
+  teal: 'drop-shadow(0 0 8px hsl(165 82% 42% / 0.5))',
   blue: 'drop-shadow(0 0 8px hsl(217 91% 60% / 0.5))',
   warn: 'drop-shadow(0 0 8px hsl(38 92% 50% / 0.5))',
   error: 'drop-shadow(0 0 8px hsl(0 84% 60% / 0.5))',
 };
 
-export function RingChart({ 
-  value, 
-  max = 100, 
-  size = 140, 
-  strokeWidth = 10,
+export function RingChart({
+  value,
+  max = 100,
+  size = 180,
+  strokeWidth = 14,
   label,
   sublabel,
   color = 'teal'
 }: RingChartProps) {
   const [mounted, setMounted] = useState(false);
-  
+
   useEffect(() => {
     setMounted(true);
   }, []);
@@ -60,7 +74,7 @@ export function RingChart({
             cy={size / 2}
             r={radius}
             fill="none"
-            stroke="hsl(210, 35%, 18%)"
+            stroke="hsl(215, 28%, 18%)"
             strokeWidth={strokeWidth}
           />
           {/* Progress ring */}
@@ -74,30 +88,38 @@ export function RingChart({
             strokeLinecap="round"
             strokeDasharray={circumference}
             initial={{ strokeDashoffset: circumference }}
-            animate={{ 
-              strokeDashoffset: mounted ? offset : circumference 
+            animate={{
+              strokeDashoffset: mounted ? offset : circumference
             }}
-            transition={{ 
-              duration: 1.5, 
+            transition={{
+              duration: 1.5,
               ease: 'easeOut',
               delay: 0.2
             }}
           />
         </svg>
-        
+
         {/* Center text */}
         <div className="absolute inset-0 flex flex-col items-center justify-center">
-          <motion.span 
-            className="text-2xl font-bold font-mono text-foreground"
+          <motion.span
+            className="text-3xl font-bold font-mono tabular-nums text-foreground"
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             transition={{ delay: 0.5 }}
           >
             {Math.round(percentage)}%
           </motion.span>
+          <motion.span
+            className={`text-xs font-medium ${colorLabelMap[color]} mt-0.5`}
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            transition={{ delay: 0.7 }}
+          >
+            {colorNameMap[color]}
+          </motion.span>
         </div>
       </div>
-      
+
       <div className="mt-3 text-center">
         <p className="text-sm font-medium text-foreground">{label}</p>
         {sublabel && (

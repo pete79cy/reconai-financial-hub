@@ -1,14 +1,14 @@
 import { useState } from 'react';
 import { motion } from 'framer-motion';
 import {
-  Calendar,
   Download,
   Upload,
   Bell,
   Search,
   FileSpreadsheet,
   Sparkles,
-  Trash2
+  Trash2,
+  MoreHorizontal,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -21,6 +21,7 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import {
@@ -32,7 +33,6 @@ import {
   AlertDialogFooter,
   AlertDialogHeader,
   AlertDialogTitle,
-  AlertDialogTrigger,
 } from '@/components/ui/alert-dialog';
 
 interface TopBarProps {
@@ -55,6 +55,12 @@ export function TopBar({ title, subtitle }: TopBarProps) {
 
   const [bankImportOpen, setBankImportOpen] = useState(false);
   const [glImportOpen, setGLImportOpen] = useState(false);
+  const [clearDialogOpen, setClearDialogOpen] = useState(false);
+
+  const hasUnmatchedData =
+    bankTransactions.length > 0 &&
+    glTransactions.length > 0 &&
+    transactions.filter((t) => t.status === 'unmatched' || t.status === 'pending').length > 0;
 
   const handleExport = () => {
     exportToCSV(transactions);
@@ -80,16 +86,8 @@ export function TopBar({ title, subtitle }: TopBarProps) {
   const handleClearData = () => {
     clearAllData();
     toast.success('All data cleared');
+    setClearDialogOpen(false);
   };
-
-  // Derive active period from transaction dates
-  const activePeriod = (() => {
-    if (transactions.length === 0) return 'No data';
-    const dates = transactions.map(t => new Date(t.date)).filter(d => !isNaN(d.getTime()));
-    if (dates.length === 0) return 'No data';
-    const latest = new Date(Math.max(...dates.map(d => d.getTime())));
-    return latest.toLocaleDateString('en-US', { month: 'short', year: 'numeric' });
-  })();
 
   return (
     <>
@@ -106,100 +104,116 @@ export function TopBar({ title, subtitle }: TopBarProps) {
           )}
         </div>
 
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2">
           {/* Search */}
           <div className="relative hidden md:block">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
             <Input
               placeholder="Search transactions..."
-              className="w-64 pl-9 bg-input border-border"
+              className="w-56 pl-9 bg-input border-border text-sm"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
             />
           </div>
 
-          {/* Date Picker (Visual) */}
-          <Button variant="outline" size="sm" className="gap-2 bg-input border-border">
-            <Calendar className="w-4 h-4" />
-            <span className="hidden sm:inline">{activePeriod}</span>
-          </Button>
-
           {/* Import Dropdown */}
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button variant="outline" size="sm" className="gap-2 bg-input border-border">
+              <Button
+                variant="outline"
+                size="sm"
+                className="gap-2 bg-input border-border"
+              >
                 <Upload className="w-4 h-4" />
                 <span className="hidden sm:inline">Import</span>
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="bg-card border-border">
-              <DropdownMenuItem onClick={() => setBankImportOpen(true)} className="gap-2 cursor-pointer">
+              <DropdownMenuItem
+                onClick={() => setBankImportOpen(true)}
+                className="gap-2 cursor-pointer"
+              >
                 <Upload className="w-4 h-4" />
                 Bank Statement (CSV)
               </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => setGLImportOpen(true)} className="gap-2 cursor-pointer">
+              <DropdownMenuItem
+                onClick={() => setGLImportOpen(true)}
+                className="gap-2 cursor-pointer"
+              >
                 <FileSpreadsheet className="w-4 h-4" />
                 GL Ledger (Excel)
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
 
-          {/* Auto Match */}
+          {/* Auto Match - prominent */}
           <Button
             variant="default"
             size="sm"
-            className="gap-2"
+            className="gap-2 relative"
             onClick={handleAutoMatch}
           >
             <Sparkles className="w-4 h-4" />
             <span className="hidden sm:inline">Match</span>
+            {hasUnmatchedData && (
+              <span className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-status-warn rounded-full border-2 border-card" />
+            )}
           </Button>
 
-          {/* Export */}
-          <Button
-            variant="outline"
-            size="sm"
-            className="gap-2 bg-input border-border"
-            onClick={handleExport}
-          >
-            <Download className="w-4 h-4" />
-            <span className="hidden sm:inline">Export</span>
-          </Button>
-
-          {/* Clear Data with Confirmation */}
-          <AlertDialog>
-            <AlertDialogTrigger asChild>
-              <Button
-                variant="ghost"
-                size="icon"
-                title="Clear all data"
-              >
-                <Trash2 className="w-4 h-4 text-muted-foreground" />
+          {/* Overflow menu: Export, Clear Data, Notifications */}
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="ghost" size="icon" className="relative">
+                <MoreHorizontal className="w-5 h-5 text-muted-foreground" />
+                {/* Notification dot */}
+                <span className="absolute top-1.5 right-1.5 w-1.5 h-1.5 bg-primary rounded-full" />
               </Button>
-            </AlertDialogTrigger>
-            <AlertDialogContent className="bg-card border-border">
-              <AlertDialogHeader>
-                <AlertDialogTitle>Clear All Data?</AlertDialogTitle>
-                <AlertDialogDescription>
-                  This will remove all imported bank and GL transactions, matched results, and reset to the default sample data. This action cannot be undone.
-                </AlertDialogDescription>
-              </AlertDialogHeader>
-              <AlertDialogFooter>
-                <AlertDialogCancel>Cancel</AlertDialogCancel>
-                <AlertDialogAction onClick={handleClearData} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
-                  Clear All Data
-                </AlertDialogAction>
-              </AlertDialogFooter>
-            </AlertDialogContent>
-          </AlertDialog>
-
-          {/* Notifications */}
-          <Button variant="ghost" size="icon" className="relative">
-            <Bell className="w-5 h-5 text-muted-foreground" />
-            <span className="absolute top-1 right-1 w-2 h-2 bg-primary rounded-full" />
-          </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="bg-card border-border w-48">
+              <DropdownMenuItem onClick={handleExport} className="gap-2 cursor-pointer">
+                <Download className="w-4 h-4" />
+                Export CSV
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem className="gap-2 cursor-pointer">
+                <Bell className="w-4 h-4" />
+                Notifications
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem
+                onClick={() => setClearDialogOpen(true)}
+                className="gap-2 cursor-pointer text-status-error focus:text-status-error"
+              >
+                <Trash2 className="w-4 h-4" />
+                Clear all data
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
       </motion.header>
+
+      {/* Clear Data Confirmation */}
+      <AlertDialog open={clearDialogOpen} onOpenChange={setClearDialogOpen}>
+        <AlertDialogContent className="bg-card border-border">
+          <AlertDialogHeader>
+            <AlertDialogTitle>Clear All Data?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This will remove all imported bank and GL transactions, matched
+              results, and reset to the default sample data. This action cannot
+              be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={handleClearData}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              Clear All Data
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       {/* Bank Import Modal */}
       <ImportModal
