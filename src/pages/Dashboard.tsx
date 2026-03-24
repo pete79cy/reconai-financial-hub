@@ -15,9 +15,19 @@ import { KPICard } from '@/components/cards/KPICard';
 import { RingChart } from '@/components/charts/RingChart';
 import { useRecon } from '@/context/ReconContext';
 import { formatCurrency } from '@/utils/reconciliation';
+import { HIGH_VALUE_THRESHOLD } from '@/utils/constants';
 
 export default function Dashboard() {
   const { transactions, bankTransactions, glTransactions } = useRecon();
+
+  // Derive active period from transaction dates
+  const activePeriod = (() => {
+    if (transactions.length === 0) return 'No data';
+    const dates = transactions.map(t => new Date(t.date)).filter(d => !isNaN(d.getTime()));
+    if (dates.length === 0) return 'No data';
+    const latest = new Date(Math.max(...dates.map(d => d.getTime())));
+    return latest.toLocaleDateString('en-US', { month: 'short', year: 'numeric' });
+  })();
 
   // Calculate KPIs
   const matched = transactions.filter(t => t.status === 'matched').length;
@@ -101,7 +111,7 @@ export default function Dashboard() {
           <KPICard
             title="High Value Alerts"
             value={highValueCount}
-            subtitle="Above €10,000"
+            subtitle={`Above ${formatCurrency(HIGH_VALUE_THRESHOLD)}`}
             icon={AlertTriangle}
             color="blue"
             delay={0.3}
@@ -190,7 +200,7 @@ export default function Dashboard() {
                   <div>
                     <p className="text-sm text-muted-foreground">Active Period</p>
                     <p className="text-xl font-bold text-foreground">
-                      Feb 2025
+                      {activePeriod}
                     </p>
                   </div>
                 </div>

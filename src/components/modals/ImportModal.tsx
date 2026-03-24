@@ -10,6 +10,7 @@ import {
 } from '@/components/ui/dialog';
 import { toast } from 'sonner';
 import { BankTransaction, GLTransaction } from '@/types/transaction';
+import { MAX_FILE_SIZE_BYTES } from '@/utils/constants';
 import * as XLSX from 'xlsx';
 
 interface ImportModalProps {
@@ -41,7 +42,7 @@ export function ImportModal({ open, onOpenChange, type, onImport }: ImportModalP
       toast.error('Please select a CSV file');
       return;
     }
-    if (file.size > 10 * 1024 * 1024) {
+    if (file.size > MAX_FILE_SIZE_BYTES) {
       toast.error('File size must be less than 10MB');
       return;
     }
@@ -143,7 +144,7 @@ export function ImportModal({ open, onOpenChange, type, onImport }: ImportModalP
       const txType = credit > 0 ? 'credit' : 'debit';
 
       transactions.push({
-        id: `GL-${Date.now()}-${i}`,
+        id: `GL-${crypto.randomUUID().slice(0, 12)}`,
         date: parseDate(String(row[dateIdx] || '')),
         description: String(row[descIdx] || '').trim(),
         amount,
@@ -192,7 +193,7 @@ export function ImportModal({ open, onOpenChange, type, onImport }: ImportModalP
       const txType = credit > 0 ? 'credit' : 'debit';
 
       transactions.push({
-        id: `BANK-${Date.now()}-${i}`,
+        id: `BANK-${crypto.randomUUID().slice(0, 12)}`,
         date: parseDate(values[dateIdx] || ''),
         description: (values[descIdx] || '').trim(),
         amount,

@@ -56,6 +56,9 @@ export interface ReconContextType {
   bankTransactions: BankTransaction[];
   glTransactions: GLTransaction[];
   rulesState: RulesState;
+  searchQuery: string;
+  setSearchQuery: (query: string) => void;
+  filteredTransactions: Transaction[];
   updateStatus: (id: string, newStatus: Status) => void;
   updateApprovalStage: (id: string, newStage: ApprovalStage) => void;
   toggleRule: (ruleKey: keyof RulesState) => void;

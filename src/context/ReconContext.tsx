@@ -1,15 +1,21 @@
-import React, { createContext, useContext, useState, useCallback, useEffect } from 'react';
-import { 
-  Transaction, 
+import React, { createContext, useContext, useState, useCallback, useEffect, useMemo } from 'react';
+import {
+  Transaction,
   BankTransaction,
   GLTransaction,
-  RulesState, 
-  ReconContextType, 
-  Status, 
+  RulesState,
+  ReconContextType,
+  Status,
   ApprovalStage,
-  INITIAL_TRANSACTIONS 
+  INITIAL_TRANSACTIONS
 } from '@/types/transaction';
 import { calculateConfidence } from '@/utils/reconciliation';
+import {
+  CONFIDENCE_AUTO_MATCH_MIN,
+  CONFIDENCE_HIGH,
+  CONFIDENCE_MEDIUM,
+  HIGH_VALUE_THRESHOLD,
+} from '@/utils/constants';
 
 const STORAGE_KEY = 'reconai_transactions';
 const BANK_STORAGE_KEY = 'reconai_bank_transactions';
@@ -17,6 +23,10 @@ const GL_STORAGE_KEY = 'reconai_gl_transactions';
 const RULES_KEY = 'reconai_rules';
 
 const ReconContext = createContext<ReconContextType | undefined>(undefined);
+
+function generateId(prefix: string): string {
+  return `${prefix}-${crypto.randomUUID().slice(0, 12)}`;
+}
 
 function loadTransactions(): Transaction[] {
   try {
@@ -88,7 +98,7 @@ function isWeekend(dateStr: string): boolean {
 }
 
 function isHighValue(amount: number): boolean {
-  return amount > 10000;
+  return amount > HIGH_VALUE_THRESHOLD;
 }
 
 export function ReconProvider({ children }: { children: React.ReactNode }) {
@@ -96,23 +106,38 @@ export function ReconProvider({ children }: { children: React.ReactNode }) {
   const [bankTransactions, setBankTransactions] = useState<BankTransaction[]>(loadBankTransactions);
   const [glTransactions, setGLTransactions] = useState<GLTransaction[]>(loadGLTransactions);
   const [rulesState, setRulesState] = useState<RulesState>(loadRules);
+  const [searchQuery, setSearchQuery] = useState('');
+
+  // Filtered transactions based on search query
+  const filteredTransactions = useMemo(() => {
+    if (!searchQuery.trim()) return transactions;
+    const q = searchQuery.toLowerCase();
+    return transactions.filter(tx =>
+      tx.id.toLowerCase().includes(q) ||
+      tx.bank_desc.toLowerCase().includes(q) ||
+      tx.gl_desc.toLowerCase().includes(q) ||
+      tx.bank_name.toLowerCase().includes(q) ||
+      tx.status.toLowerCase().includes(q) ||
+      tx.amount.toFixed(2).includes(q)
+    );
+  }, [transactions, searchQuery]);
 
   const recalculateFlags = useCallback(() => {
     setTransactions(prev => {
       const updated = prev.map(tx => {
         const flags: string[] = [];
-        
+
         if (rulesState.highValue && isHighValue(tx.amount)) {
           flags.push('High Value');
         }
-        
+
         if (rulesState.weekendAlert && isWeekend(tx.date)) {
           flags.push('Weekend');
         }
-        
+
         return { ...tx, flags };
       });
-      
+
       saveTransactions(updated);
       return updated;
     });
@@ -125,7 +150,7 @@ export function ReconProvider({ children }: { children: React.ReactNode }) {
 
   const updateStatus = useCallback((id: string, newStatus: Status) => {
     setTransactions(prev => {
-      const updated = prev.map(tx => 
+      const updated = prev.map(tx =>
         tx.id === id ? { ...tx, status: newStatus } : tx
       );
       saveTransactions(updated);
@@ -135,7 +160,7 @@ export function ReconProvider({ children }: { children: React.ReactNode }) {
 
   const updateApprovalStage = useCallback((id: string, newStage: ApprovalStage) => {
     setTransactions(prev => {
-      const updated = prev.map(tx => 
+      const updated = prev.map(tx =>
         tx.id === id ? { ...tx, approval_stage: newStage } : tx
       );
       saveTransactions(updated);
@@ -161,7 +186,10 @@ export function ReconProvider({ children }: { children: React.ReactNode }) {
 
   const importBankTransactions = useCallback((txs: BankTransaction[]) => {
     setBankTransactions(prev => {
-      const updated = [...prev, ...txs];
+      // Duplicate detection: skip transactions with same amount+date+description
+      const existingKeys = new Set(prev.map(t => `${t.date}|${t.amount}|${t.description}`));
+      const newTxs = txs.filter(t => !existingKeys.has(`${t.date}|${t.amount}|${t.description}`));
+      const updated = [...prev, ...newTxs];
       saveBankTransactions(updated);
       return updated;
     });
@@ -169,7 +197,10 @@ export function ReconProvider({ children }: { children: React.ReactNode }) {
 
   const importGLTransactions = useCallback((txs: GLTransaction[]) => {
     setGLTransactions(prev => {
-      const updated = [...prev, ...txs];
+      // Duplicate detection: skip transactions with same amount+date+description
+      const existingKeys = new Set(prev.map(t => `${t.date}|${t.amount}|${t.description}`));
+      const newTxs = txs.filter(t => !existingKeys.has(`${t.date}|${t.amount}|${t.description}`));
+      const updated = [...prev, ...newTxs];
       saveGLTransactions(updated);
       return updated;
     });
@@ -200,7 +231,7 @@ export function ReconProvider({ children }: { children: React.ReactNode }) {
           glTx.description
         );
 
-        if (confidence > bestConfidence && confidence >= 50) {
+        if (confidence > bestConfidence && confidence >= CONFIDENCE_AUTO_MATCH_MIN) {
           bestConfidence = confidence;
           bestMatch = glTx;
         }
@@ -211,16 +242,16 @@ export function ReconProvider({ children }: { children: React.ReactNode }) {
         usedGLIds.add(bestMatch.id);
 
         newMatches.push({
-          id: `MATCH-${Date.now()}-${newMatches.length}`,
+          id: generateId('MATCH'),
           date: bankTx.date,
           bank_desc: bankTx.description,
           gl_desc: bestMatch.description,
           amount: bankTx.amount,
           currency: 'EUR',
           bank_name: bankTx.bank_name,
-          match_type: bestConfidence >= 90 ? '1:1' : 'Manual',
+          match_type: bestConfidence >= CONFIDENCE_HIGH ? '1:1' : 'Manual',
           confidence: bestConfidence,
-          status: bestConfidence >= 80 ? 'matched' : 'pending',
+          status: bestConfidence >= CONFIDENCE_MEDIUM ? 'matched' : 'pending',
           approval_stage: 'none',
           bank_tx_id: bankTx.id,
           gl_tx_id: bestMatch.id,
@@ -232,7 +263,7 @@ export function ReconProvider({ children }: { children: React.ReactNode }) {
     for (const bankTx of bankTransactions) {
       if (!usedBankIds.has(bankTx.id)) {
         newMatches.push({
-          id: `UNMATCHED-BANK-${Date.now()}-${bankTx.id}`,
+          id: generateId('UNMATCHED-BANK'),
           date: bankTx.date,
           bank_desc: bankTx.description,
           gl_desc: '',
@@ -252,7 +283,7 @@ export function ReconProvider({ children }: { children: React.ReactNode }) {
     for (const glTx of glTransactions) {
       if (!usedGLIds.has(glTx.id)) {
         newMatches.push({
-          id: `UNMATCHED-GL-${Date.now()}-${glTx.id}`,
+          id: generateId('UNMATCHED-GL'),
           date: glTx.date,
           bank_desc: '',
           gl_desc: glTx.description,
@@ -275,7 +306,7 @@ export function ReconProvider({ children }: { children: React.ReactNode }) {
         return updated;
       });
     }
-  
+
   }, [bankTransactions, glTransactions]);
 
   const clearAllData = useCallback(() => {
@@ -293,6 +324,9 @@ export function ReconProvider({ children }: { children: React.ReactNode }) {
       bankTransactions,
       glTransactions,
       rulesState,
+      searchQuery,
+      setSearchQuery,
+      filteredTransactions,
       updateStatus,
       updateApprovalStage,
       toggleRule,

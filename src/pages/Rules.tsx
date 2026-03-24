@@ -4,6 +4,8 @@ import { TopBar } from '@/components/layout/TopBar';
 import { Switch } from '@/components/ui/switch';
 import { useRecon } from '@/context/ReconContext';
 import { cn } from '@/lib/utils';
+import { HIGH_VALUE_THRESHOLD } from '@/utils/constants';
+import { formatCurrency } from '@/utils/reconciliation';
 
 interface RuleCardProps {
   title: string;
@@ -75,7 +77,7 @@ export default function Rules() {
   const { rulesState, toggleRule, transactions } = useRecon();
 
   // Count affected transactions
-  const highValueCount = transactions.filter(t => t.amount > 10000).length;
+  const highValueCount = transactions.filter(t => t.amount > HIGH_VALUE_THRESHOLD).length;
   const weekendCount = transactions.filter(t => {
     const day = new Date(t.date).getDay();
     return day === 0 || day === 6;
@@ -115,7 +117,7 @@ export default function Rules() {
         <div className="grid gap-4">
           <RuleCard
             title="High Value Alert"
-            description={`Flag transactions exceeding €10,000. Currently ${highValueCount} transactions would be flagged.`}
+            description={`Flag transactions exceeding ${formatCurrency(HIGH_VALUE_THRESHOLD)}. Currently ${highValueCount} transactions would be flagged.`}
             icon={<AlertTriangle className="w-6 h-6" />}
             enabled={rulesState.highValue}
             onToggle={() => toggleRule('highValue')}

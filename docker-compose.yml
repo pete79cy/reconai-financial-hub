@@ -1,0 +1,7 @@
+services:
+  reconai:
+    build: .
+    container_name: reconai-financial-hub
+    ports:
+      - "3000:3000"
+    restart: unless-stopped

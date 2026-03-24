@@ -1,9 +1,9 @@
 import { useState } from 'react';
 import { motion } from 'framer-motion';
-import { 
-  Calendar, 
-  Download, 
-  Upload, 
+import {
+  Calendar,
+  Download,
+  Upload,
   Bell,
   Search,
   FileSpreadsheet,
@@ -23,6 +23,17 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from '@/components/ui/alert-dialog';
 
 interface TopBarProps {
   title: string;
@@ -30,16 +41,18 @@ interface TopBarProps {
 }
 
 export function TopBar({ title, subtitle }: TopBarProps) {
-  const { 
-    transactions, 
-    bankTransactions, 
-    glTransactions, 
-    importBankTransactions, 
-    importGLTransactions, 
+  const {
+    transactions,
+    bankTransactions,
+    glTransactions,
+    importBankTransactions,
+    importGLTransactions,
     runAutoMatch,
-    clearAllData 
+    clearAllData,
+    searchQuery,
+    setSearchQuery,
   } = useRecon();
-  
+
   const [bankImportOpen, setBankImportOpen] = useState(false);
   const [glImportOpen, setGLImportOpen] = useState(false);
 
@@ -69,6 +82,15 @@ export function TopBar({ title, subtitle }: TopBarProps) {
     toast.success('All data cleared');
   };
 
+  // Derive active period from transaction dates
+  const activePeriod = (() => {
+    if (transactions.length === 0) return 'No data';
+    const dates = transactions.map(t => new Date(t.date)).filter(d => !isNaN(d.getTime()));
+    if (dates.length === 0) return 'No data';
+    const latest = new Date(Math.max(...dates.map(d => d.getTime())));
+    return latest.toLocaleDateString('en-US', { month: 'short', year: 'numeric' });
+  })();
+
   return (
     <>
       <motion.header
@@ -88,16 +110,18 @@ export function TopBar({ title, subtitle }: TopBarProps) {
           {/* Search */}
           <div className="relative hidden md:block">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-            <Input 
+            <Input
               placeholder="Search transactions..."
               className="w-64 pl-9 bg-input border-border"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
             />
           </div>
 
           {/* Date Picker (Visual) */}
           <Button variant="outline" size="sm" className="gap-2 bg-input border-border">
             <Calendar className="w-4 h-4" />
-            <span className="hidden sm:inline">Feb 2025</span>
+            <span className="hidden sm:inline">{activePeriod}</span>
           </Button>
 
           {/* Import Dropdown */}
@@ -121,9 +145,9 @@ export function TopBar({ title, subtitle }: TopBarProps) {
           </DropdownMenu>
 
           {/* Auto Match */}
-          <Button 
-            variant="default" 
-            size="sm" 
+          <Button
+            variant="default"
+            size="sm"
             className="gap-2"
             onClick={handleAutoMatch}
           >
@@ -132,9 +156,9 @@ export function TopBar({ title, subtitle }: TopBarProps) {
           </Button>
 
           {/* Export */}
-          <Button 
-            variant="outline" 
-            size="sm" 
+          <Button
+            variant="outline"
+            size="sm"
             className="gap-2 bg-input border-border"
             onClick={handleExport}
           >
@@ -142,15 +166,32 @@ export function TopBar({ title, subtitle }: TopBarProps) {
             <span className="hidden sm:inline">Export</span>
           </Button>
 
-          {/* Clear Data */}
-          <Button 
-            variant="ghost" 
-            size="icon"
-            onClick={handleClearData}
-            title="Clear all data"
-          >
-            <Trash2 className="w-4 h-4 text-muted-foreground" />
-          </Button>
+          {/* Clear Data with Confirmation */}
+          <AlertDialog>
+            <AlertDialogTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon"
+                title="Clear all data"
+              >
+                <Trash2 className="w-4 h-4 text-muted-foreground" />
+              </Button>
+            </AlertDialogTrigger>
+            <AlertDialogContent className="bg-card border-border">
+              <AlertDialogHeader>
+                <AlertDialogTitle>Clear All Data?</AlertDialogTitle>
+                <AlertDialogDescription>
+                  This will remove all imported bank and GL transactions, matched results, and reset to the default sample data. This action cannot be undone.
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel>Cancel</AlertDialogCancel>
+                <AlertDialogAction onClick={handleClearData} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
+                  Clear All Data
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
 
           {/* Notifications */}
           <Button variant="ghost" size="icon" className="relative">

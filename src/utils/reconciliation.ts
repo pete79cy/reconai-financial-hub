@@ -38,15 +38,18 @@ export function getStatusColor(status: string): string {
 }
 
 export function exportToCSV(transactions: Transaction[], filename?: string) {
-  const headers = ['ID', 'Date', 'Bank Description', 'Amount', 'Status', 'Flags'];
-  
+  const headers = ['ID', 'Date', 'Bank Description', 'GL Description', 'Amount', 'Confidence', 'Match Type', 'Status', 'Flags'];
+
   const rows = transactions.map(tx => [
     tx.id,
     tx.date,
-    `"${tx.bank_desc}"`,
+    `"${(tx.bank_desc || '').replace(/"/g, '""')}"`,
+    `"${(tx.gl_desc || '').replace(/"/g, '""')}"`,
     tx.amount.toFixed(2),
+    tx.confidence.toString(),
+    tx.match_type,
     tx.status,
-    (tx.flags || []).join('; ')
+    `"${(tx.flags || []).join('; ')}"`
   ]);
   
   const csvContent = [
