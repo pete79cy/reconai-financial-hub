@@ -11,6 +11,7 @@ import {
 import { toast } from 'sonner';
 import { BankTransaction, GLTransaction } from '@/types/transaction';
 import { MAX_FILE_SIZE_BYTES } from '@/utils/constants';
+import { generateId } from '@/utils/id';
 import * as XLSX from 'xlsx';
 
 interface ImportModalProps {
@@ -144,7 +145,7 @@ export function ImportModal({ open, onOpenChange, type, onImport }: ImportModalP
       const txType = credit > 0 ? 'credit' : 'debit';
 
       transactions.push({
-        id: `GL-${crypto.randomUUID().slice(0, 12)}`,
+        id: generateId('GL'),
         date: parseDate(String(row[dateIdx] || '')),
         description: String(row[descIdx] || '').trim(),
         amount,
@@ -193,7 +194,7 @@ export function ImportModal({ open, onOpenChange, type, onImport }: ImportModalP
       const txType = credit > 0 ? 'credit' : 'debit';
 
       transactions.push({
-        id: `BANK-${crypto.randomUUID().slice(0, 12)}`,
+        id: generateId('BANK'),
         date: parseDate(values[dateIdx] || ''),
         description: (values[descIdx] || '').trim(),
         amount,

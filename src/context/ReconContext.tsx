@@ -16,6 +16,7 @@ import {
   CONFIDENCE_MEDIUM,
   HIGH_VALUE_THRESHOLD,
 } from '@/utils/constants';
+import { generateId } from '@/utils/id';
 
 const STORAGE_KEY = 'reconai_transactions';
 const BANK_STORAGE_KEY = 'reconai_bank_transactions';
@@ -23,10 +24,6 @@ const GL_STORAGE_KEY = 'reconai_gl_transactions';
 const RULES_KEY = 'reconai_rules';
 
 const ReconContext = createContext<ReconContextType | undefined>(undefined);
-
-function generateId(prefix: string): string {
-  return `${prefix}-${crypto.randomUUID().slice(0, 12)}`;
-}
 
 function loadTransactions(): Transaction[] {
   try {
