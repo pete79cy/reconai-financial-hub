@@ -25,12 +25,12 @@ import { ConfidenceMeter } from '@/components/ui/ConfidenceMeter';
 import { formatCurrency, formatDate } from '@/utils/reconciliation';
 import { useRecon } from '@/context/ReconContext';
 import {
-  Sheet,
-  SheetContent,
-  SheetHeader,
-  SheetTitle,
-  SheetDescription,
-} from '@/components/ui/sheet';
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+} from '@/components/ui/dialog';
 
 interface TransactionDetailModalProps {
   transaction: Transaction | null;
@@ -98,20 +98,17 @@ export function TransactionDetailModal({
   ];
 
   return (
-    <Sheet open={open} onOpenChange={onClose}>
-      <SheetContent
-        side="right"
-        className="w-full sm:max-w-lg bg-card border-border overflow-y-auto"
-      >
-        <SheetHeader className="pb-4 border-b border-border">
-          <div className="flex items-center justify-between pr-6">
-            <SheetTitle className="text-base">Transaction details</SheetTitle>
+    <Dialog open={open} onOpenChange={onClose}>
+      <DialogContent className="bg-card border-border max-w-2xl max-h-[90vh] overflow-y-auto">
+        <DialogHeader className="pb-4 border-b border-border">
+          <div className="flex items-center justify-between">
+            <DialogTitle className="text-base">Transaction details</DialogTitle>
             <StatusBadge status={transaction.status} />
           </div>
-          <SheetDescription className="sr-only">
+          <DialogDescription className="sr-only">
             Details for transaction {transaction.id}
-          </SheetDescription>
-        </SheetHeader>
+          </DialogDescription>
+        </DialogHeader>
 
         <div className="space-y-5 py-6">
           {/* ID and Date */}
@@ -370,7 +367,7 @@ export function TransactionDetailModal({
             </div>
           </div>
         </div>
-      </SheetContent>
-    </Sheet>
+      </DialogContent>
+    </Dialog>
   );
 }
