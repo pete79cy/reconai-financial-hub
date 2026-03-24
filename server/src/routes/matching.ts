@@ -67,6 +67,34 @@ function glDescriptionContainsRef(glDesc: string, refNumber: string): boolean {
   return glDesc.replace(/\s/g, '').includes(cleaned);
 }
 
+/**
+ * Derive the current period (YYYY-MM) from bank_metadata period_to date.
+ */
+function derivePeriodFromDate(dateStr: string | null): string | null {
+  if (!dateStr) return null;
+  const d = new Date(dateStr);
+  if (isNaN(d.getTime())) return null;
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  return `${year}-${month}`;
+}
+
+/**
+ * Compute the previous period string (YYYY-MM).
+ */
+function getPreviousPeriod(period: string): string {
+  const [yearStr, monthStr] = period.split('-');
+  const year = parseInt(yearStr, 10);
+  const month = parseInt(monthStr, 10);
+  let prevYear = year;
+  let prevMonth = month - 1;
+  if (prevMonth < 1) {
+    prevMonth = 12;
+    prevYear -= 1;
+  }
+  return `${prevYear}-${String(prevMonth).padStart(2, '0')}`;
+}
+
 // POST /api/matching/run - run 3-pass auto-match algorithm
 router.post('/run', async (_req: Request, res: Response) => {
   const client = await pool.connect();
@@ -377,6 +405,125 @@ router.post('/run', async (_req: Request, res: Response) => {
       );
     }
 
+    // ============================================================
+    // Outstanding check carry-forward logic
+    // ============================================================
+    // Derive current period from bank_metadata period_to date
+    const metadataResult = await client.query(
+      'SELECT * FROM bank_metadata ORDER BY created_at DESC LIMIT 1'
+    );
+    const metadata = metadataResult.rows[0];
+    const currentPeriod = metadata ? derivePeriodFromDate(metadata.period_to) : null;
+
+    if (currentPeriod) {
+      const prevPeriod = getPreviousPeriod(currentPeriod);
+
+      // Get outstanding items from previous period that are still outstanding
+      const prevOutstanding = await client.query(
+        `SELECT * FROM outstanding_items WHERE period = $1 AND status = 'outstanding'`,
+        [prevPeriod]
+      );
+
+      // Build a set of reference numbers that appeared in the current bank statement (cheques)
+      const bankRefSet = new Set<string>();
+      for (const bt of bankTxs) {
+        if (bt.reference_number) {
+          bankRefSet.add(bt.reference_number.replace(/\s/g, ''));
+        }
+      }
+
+      // Check each outstanding cheque from previous period
+      for (const item of prevOutstanding.rows) {
+        if (item.item_type === 'cheque' && item.reference_number) {
+          const ref = item.reference_number.replace(/\s/g, '');
+          if (bankRefSet.has(ref)) {
+            // This cheque cleared in the current bank statement
+            await client.query(
+              `UPDATE outstanding_items
+               SET status = 'cleared', cleared_in_period = $2, cleared_date = CURRENT_DATE
+               WHERE id = $1`,
+              [item.id, currentPeriod]
+            );
+          }
+        }
+      }
+
+      // Ensure current period exists in reconciliation_periods
+      await client.query(
+        `INSERT INTO reconciliation_periods (id, status) VALUES ($1, 'open')
+         ON CONFLICT (id) DO NOTHING`,
+        [currentPeriod]
+      );
+
+      // For new unmatched GL cheques from the current run, add them to outstanding_items
+      // (only if they don't already exist in outstanding_items for this period)
+      const unmatchedGLCheques = glTxs.filter(gl => {
+        if (usedGLIds.has(gl.id)) return false;
+        const src = (gl.source || '').toLowerCase();
+        return src.includes('payment') || src.includes('cheque') || src.includes('check');
+      });
+
+      for (const glTx of unmatchedGLCheques) {
+        // Check if already tracked in outstanding_items for this period
+        const existing = await client.query(
+          `SELECT id FROM outstanding_items WHERE period = $1 AND gl_tx_id = $2`,
+          [currentPeriod, glTx.id]
+        );
+        if (existing.rows.length === 0) {
+          const glRef = extractGLChequeNumber(glTx.description);
+          await client.query(
+            `INSERT INTO outstanding_items
+             (id, period, item_type, reference_number, description, amount, date, source, gl_tx_id, source_period, status)
+             VALUES ($1, $2, 'cheque', $3, $4, $5, $6, $7, $8, $9, 'outstanding')`,
+            [
+              generateId('OI'),
+              currentPeriod,
+              glRef,
+              glTx.description,
+              parseFloat(glTx.amount),
+              glTx.date,
+              glTx.source,
+              glTx.id,
+              currentPeriod,
+            ]
+          );
+        }
+      }
+
+      // Also add new unmatched GL deposits to outstanding_items
+      const unmatchedGLDeposits = glTxs.filter(gl => {
+        if (usedGLIds.has(gl.id)) return false;
+        if (gl.type !== 'debit') return false;
+        const src = (gl.source || '').toLowerCase();
+        return src.includes('deposit') || src.includes('receipt');
+      });
+
+      for (const glTx of unmatchedGLDeposits) {
+        const existing = await client.query(
+          `SELECT id FROM outstanding_items WHERE period = $1 AND gl_tx_id = $2`,
+          [currentPeriod, glTx.id]
+        );
+        if (existing.rows.length === 0) {
+          await client.query(
+            `INSERT INTO outstanding_items
+             (id, period, item_type, reference_number, description, amount, date, source, gl_tx_id, source_period, status)
+             VALUES ($1, $2, 'deposit', $3, $4, $5, $6, $7, $8, $9, 'outstanding')`,
+            [
+              generateId('OI'),
+              currentPeriod,
+              null,
+              glTx.description,
+              parseFloat(glTx.amount),
+              glTx.date,
+              glTx.source,
+              glTx.id,
+              currentPeriod,
+            ]
+          );
+        }
+      }
+    }
+
     await client.query('COMMIT');
 
     const matched = matches.filter(m => m.status === 'matched' || m.status === 'pending').length;
@@ -386,6 +533,7 @@ router.post('/run', async (_req: Request, res: Response) => {
       total: matches.length,
       matched,
       unmatched,
+      currentPeriod: currentPeriod || null,
       transactions: matches,
     });
   } catch (err) {

@@ -99,6 +99,38 @@ export async function runMigrations() {
       );
     `);
 
+    // Reconciliation period management tables
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS reconciliation_periods (
+        id TEXT PRIMARY KEY,
+        status TEXT DEFAULT 'open',
+        bank_balance DECIMAL(15,2),
+        gl_balance DECIMAL(15,2),
+        adjusted_bank_balance DECIMAL(15,2),
+        adjusted_gl_balance DECIMAL(15,2),
+        proof DECIMAL(15,2),
+        closed_at TIMESTAMPTZ,
+        created_at TIMESTAMPTZ DEFAULT NOW()
+      );
+
+      CREATE TABLE IF NOT EXISTS outstanding_items (
+        id TEXT PRIMARY KEY,
+        period TEXT NOT NULL,
+        item_type TEXT NOT NULL,
+        reference_number TEXT,
+        description TEXT,
+        amount DECIMAL(15,2) NOT NULL,
+        date DATE,
+        source TEXT,
+        gl_tx_id TEXT,
+        source_period TEXT,
+        status TEXT DEFAULT 'outstanding',
+        cleared_in_period TEXT,
+        cleared_date DATE,
+        created_at TIMESTAMPTZ DEFAULT NOW()
+      );
+    `);
+
     console.log('Database migrations completed successfully');
   } catch (err) {
     console.error('Migration error:', err);
