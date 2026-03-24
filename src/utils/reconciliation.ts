@@ -8,11 +8,13 @@ export function formatCurrency(amount: number): string {
 }
 
 export function formatDate(dateStr: string): string {
+  const d = new Date(dateStr);
+  if (isNaN(d.getTime())) return dateStr || '—';
   return new Intl.DateTimeFormat('en-GB', {
     day: '2-digit',
     month: 'short',
     year: 'numeric'
-  }).format(new Date(dateStr));
+  }).format(d);
 }
 
 export function getConfidenceColor(confidence: number): string {
