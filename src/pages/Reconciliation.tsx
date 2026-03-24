@@ -664,20 +664,20 @@ export default function Reconciliation() {
             >
               <ExpandableSection
                 title="Outstanding Checks"
-                count={summary.outstandingChecks_list.length}
-                items={summary.outstandingChecks_list}
+                count={summary.outstandingChecksList.length}
+                items={summary.outstandingChecksList}
                 sectionKey="checks"
               />
               <ExpandableSection
                 title="Outstanding Deposits"
-                count={summary.outstandingDeposits_list.length}
-                items={summary.outstandingDeposits_list}
+                count={summary.outstandingDepositsList.length}
+                items={summary.outstandingDepositsList}
                 sectionKey="deposits"
               />
               <ExpandableSection
                 title="Outstanding Other"
-                count={summary.outstandingOther_list.length}
-                items={summary.outstandingOther_list}
+                count={summary.outstandingOtherList.length}
+                items={summary.outstandingOtherList}
                 sectionKey="other"
               />
 
