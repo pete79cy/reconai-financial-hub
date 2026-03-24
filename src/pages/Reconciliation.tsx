@@ -181,7 +181,14 @@ export default function Reconciliation() {
       const res = await fetch(url);
       if (res.ok) {
         const data = await res.json();
-        setSummary(data);
+        setSummary({
+          ...defaultSummary,
+          ...data,
+          outstandingChecksList: data.outstandingChecksList || [],
+          outstandingDepositsList: data.outstandingDepositsList || [],
+          outstandingOtherList: data.outstandingOtherList || [],
+          adjustments: data.adjustments || [],
+        });
       } else {
         setSummary(defaultSummary);
       }

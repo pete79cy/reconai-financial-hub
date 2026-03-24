@@ -552,6 +552,12 @@ router.get('/summary', async (req: Request, res: Response) => {
     const adjustedGLBalance = glBalance + feesNotBooked + depositCorrections + otherAdjustments;
     const proof = adjustedBankBalance - adjustedGLBalance;
 
+    // Fetch adjustment line items for display
+    const adjPeriodQ = period ? ` WHERE period = '${period}'` : '';
+    const adjustmentsResult = await pool.query(
+      `SELECT * FROM reconciliation_adjustments${adjPeriodQ} ORDER BY created_at DESC`
+    );
+
     res.json({
       period: displayPeriod,
       bankBalance: Math.round(bankBalance * 100) / 100,
@@ -568,6 +574,7 @@ router.get('/summary', async (req: Request, res: Response) => {
       outstandingChecksList,
       outstandingDepositsList,
       outstandingOtherList,
+      adjustments: adjustmentsResult.rows,
     });
   } catch (err) {
     console.error('Error fetching reconciliation summary:', err);
