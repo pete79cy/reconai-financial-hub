@@ -1,6 +1,32 @@
 import { Router, Request, Response } from 'express';
 import pool from '../db';
 
+// Sanitize date to YYYY-MM-DD format for PostgreSQL
+function sanitizeDate(dateStr: string): string {
+  if (!dateStr) return new Date().toISOString().split('T')[0];
+  const str = String(dateStr).trim();
+
+  // Already YYYY-MM-DD
+  if (/^\d{4}-\d{2}-\d{2}$/.test(str)) return str;
+
+  // DD/MM/YYYY or D/M/YYYY
+  const slashParts = str.split('/');
+  if (slashParts.length === 3) {
+    const [day, month, year] = slashParts;
+    const fullYear = year.length === 2 ? `20${year}` : year;
+    return `${fullYear}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`;
+  }
+
+  // Try native Date parsing as fallback
+  const d = new Date(str);
+  if (!isNaN(d.getTime())) {
+    return d.toISOString().split('T')[0];
+  }
+
+  // Last resort: today's date
+  return new Date().toISOString().split('T')[0];
+}
+
 const router = Router();
 
 // GET /api/gl-transactions
@@ -33,14 +59,14 @@ router.post('/import', async (req: Request, res: Response) => {
       const exists = await client.query(
         `SELECT 1 FROM gl_transactions
          WHERE date = $1 AND amount = $2 AND description = $3 LIMIT 1`,
-        [tx.date, tx.amount, tx.description]
+        [sanitizeDate(tx.date), tx.amount, tx.description]
       );
 
       if (exists.rows.length === 0) {
         await client.query(
           `INSERT INTO gl_transactions (id, date, description, amount, currency, type, reference, source)
            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-          [tx.id, tx.date, tx.description, tx.amount, tx.currency || 'EUR', tx.type, tx.reference || null, tx.source || 'Unknown']
+          [tx.id, sanitizeDate(tx.date), tx.description, tx.amount, tx.currency || 'EUR', tx.type, tx.reference || null, tx.source || 'Unknown']
         );
         imported++;
       }
