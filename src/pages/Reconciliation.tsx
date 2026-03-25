@@ -739,6 +739,31 @@ export default function Reconciliation() {
           </Button>
           <Button
             size="sm"
+            variant="outline"
+            className="gap-1 text-red-400 border-red-500/30 hover:bg-red-500/10"
+            onClick={async () => {
+              if (!selectedPeriod) return;
+              if (!confirm('Delete ALL outstanding items for this period?')) return;
+              try {
+                const res = await fetch(`/api/reconciliation/outstanding/clear-all?period=${selectedPeriod}`, { method: 'DELETE' });
+                if (res.ok) {
+                  const data = await res.json();
+                  toast.success(`Deleted ${data.deleted} outstanding items`);
+                  fetchSummary();
+                } else {
+                  toast.error('Failed to delete outstanding items');
+                }
+              } catch {
+                toast.error('Failed to delete outstanding items');
+              }
+            }}
+            disabled={!selectedPeriod || isPeriodClosed}
+          >
+            <Trash2 className="w-3 h-3" />
+            Clear All Outstanding
+          </Button>
+          <Button
+            size="sm"
             variant="default"
             className="gap-1"
             onClick={handleClosePeriod}
