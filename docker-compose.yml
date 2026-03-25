@@ -14,7 +14,7 @@ services:
     build: ./server
     container_name: reconai-backend
     environment:
-      - DATABASE_URL=postgresql://MbELlVpssTiWnG32:QsLYt3xY563h1DrgJlmxMy6vBfsGKOXY@postgresql:5432/LJVtsBRb1UVXidr9
+      - DATABASE_URL=postgresql://MbELlVpssTiWnG32:QsLYt3xY563h1DrgJlmxMy6vBfsGKOXY@postgresql-dere-postgresql-1:5432/LJVtsBRb1UVXidr9
       - PORT=4000
     restart: unless-stopped
     networks:
