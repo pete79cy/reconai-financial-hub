@@ -340,6 +340,27 @@ router.put('/outstanding/:id', async (req: Request, res: Response) => {
   }
 });
 
+// DELETE /api/reconciliation/outstanding/clear-all - delete all outstanding items for a period
+// IMPORTANT: must be before /:id route to avoid matching "clear-all" as an id
+router.delete('/outstanding/clear-all', async (req: Request, res: Response) => {
+  const { period } = req.query;
+
+  if (!period) {
+    return res.status(400).json({ error: 'period query parameter is required' });
+  }
+
+  try {
+    const result = await pool.query(
+      'DELETE FROM outstanding_items WHERE period = $1 RETURNING id',
+      [period]
+    );
+    res.json({ deleted: result.rowCount });
+  } catch (err) {
+    console.error('Error clearing all outstanding items:', err);
+    res.status(500).json({ error: 'Failed to clear outstanding items' });
+  }
+});
+
 // DELETE /api/reconciliation/outstanding/:id - delete an outstanding item
 router.delete('/outstanding/:id', async (req: Request, res: Response) => {
   const { id } = req.params;
@@ -357,26 +378,6 @@ router.delete('/outstanding/:id', async (req: Request, res: Response) => {
   } catch (err) {
     console.error('Error deleting outstanding item:', err);
     res.status(500).json({ error: 'Failed to delete outstanding item' });
-  }
-});
-
-// DELETE /api/reconciliation/outstanding/clear-all - delete all outstanding items for a period
-router.delete('/outstanding/clear-all', async (req: Request, res: Response) => {
-  const { period } = req.query;
-
-  if (!period) {
-    return res.status(400).json({ error: 'period query parameter is required' });
-  }
-
-  try {
-    const result = await pool.query(
-      'DELETE FROM outstanding_items WHERE period = $1 RETURNING id',
-      [period]
-    );
-    res.json({ deleted: result.rowCount });
-  } catch (err) {
-    console.error('Error clearing all outstanding items:', err);
-    res.status(500).json({ error: 'Failed to clear outstanding items' });
   }
 });
 
