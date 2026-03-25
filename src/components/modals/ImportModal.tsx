@@ -89,11 +89,29 @@ export function ImportModal({ open, onOpenChange, type, onImport }: ImportModalP
     if (file) handleFileSelect(file);
   };
 
-  // Parse European number format (e.g., "1.234,56" -> 1234.56)
-  const parseEuropeanNumber = (value: string): number => {
-    if (!value || value.trim() === '') return 0;
-    const cleaned = value.replace(/\./g, '').replace(',', '.');
-    return parseFloat(cleaned) || 0;
+  // Parse number that may be European format string ("1.234,56") or raw number (61.99)
+  const parseEuropeanNumber = (value: string | number): number => {
+    // If it's already a number (from Excel), return it directly
+    if (typeof value === 'number') return value;
+
+    const str = String(value).trim();
+    if (!str) return 0;
+
+    // Detect format: if there's a comma after the last dot, it's European (1.234,56)
+    // If there's a dot after the last comma, it's US/standard (1,234.56)
+    const lastDot = str.lastIndexOf('.');
+    const lastComma = str.lastIndexOf(',');
+
+    if (lastComma > lastDot) {
+      // European format: dots are thousands, comma is decimal (e.g., "1.234,56")
+      return parseFloat(str.replace(/\./g, '').replace(',', '.')) || 0;
+    } else if (lastDot > lastComma) {
+      // US format or simple decimal: commas are thousands, dot is decimal (e.g., "1,234.56")
+      return parseFloat(str.replace(/,/g, '')) || 0;
+    } else {
+      // No separators or only one type
+      return parseFloat(str.replace(/,/g, '')) || 0;
+    }
   };
 
   // Convert D/M/YYYY or DD/MM/YYYY to YYYY-MM-DD

@@ -75,6 +75,7 @@ export interface ReconContextType {
   importGLTransactions: (txs: GLTransaction[]) => void;
   runAutoMatch: () => void;
   clearAllData: () => void;
+  refreshData: () => Promise<void>;
 }
 
 // Seed data

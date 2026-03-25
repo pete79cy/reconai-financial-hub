@@ -33,29 +33,29 @@ export function ReconProvider({ children }: { children: React.ReactNode }) {
   const [searchQuery, setSearchQuery] = useState('');
   const [loading, setLoading] = useState(true);
 
+  const refreshData = useCallback(async () => {
+    try {
+      const [txs, bankTxs, glTxs, rules] = await Promise.all([
+        apiFetch<Transaction[]>('/transactions'),
+        apiFetch<BankTransaction[]>('/bank-transactions'),
+        apiFetch<GLTransaction[]>('/gl-transactions'),
+        apiFetch<RulesState>('/rules'),
+      ]);
+      setTransactions(txs);
+      setBankTransactions(bankTxs);
+      setGLTransactions(glTxs);
+      setRulesState(rules);
+    } catch (err) {
+      console.error('Failed to load data from API:', err);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
   // Fetch all data from API on mount
   useEffect(() => {
-    async function loadAll() {
-      try {
-        const [txs, bankTxs, glTxs, rules] = await Promise.all([
-          apiFetch<Transaction[]>('/transactions'),
-          apiFetch<BankTransaction[]>('/bank-transactions'),
-          apiFetch<GLTransaction[]>('/gl-transactions'),
-          apiFetch<RulesState>('/rules'),
-        ]);
-        setTransactions(txs);
-        setBankTransactions(bankTxs);
-        setGLTransactions(glTxs);
-        setRulesState(rules);
-      } catch (err) {
-        console.error('Failed to load data from API:', err);
-        // Fallback: start with empty state
-      } finally {
-        setLoading(false);
-      }
-    }
-    loadAll();
-  }, []);
+    refreshData();
+  }, [refreshData]);
 
   // Filtered transactions based on search query
   const filteredTransactions = useMemo(() => {
@@ -211,6 +211,7 @@ export function ReconProvider({ children }: { children: React.ReactNode }) {
       importGLTransactions,
       runAutoMatch,
       clearAllData,
+      refreshData,
     }}>
       {children}
     </ReconContext.Provider>

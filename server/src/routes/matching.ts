@@ -545,4 +545,133 @@ router.post('/run', async (_req: Request, res: Response) => {
   }
 });
 
+// GET /api/matching/unmatched-bank - get unmatched bank transactions with optional search
+router.get('/unmatched-bank', async (req: Request, res: Response) => {
+  const search = (req.query.q as string) || '';
+  try {
+    let query = `
+      SELECT bt.* FROM bank_transactions bt
+      WHERE bt.id NOT IN (
+        SELECT bank_tx_id FROM matched_transactions
+        WHERE bank_tx_id IS NOT NULL AND status IN ('matched', 'approved', 'pending')
+      )
+    `;
+    const params: string[] = [];
+
+    if (search) {
+      params.push(`%${search}%`);
+      query += ` AND (bt.description ILIKE $1 OR bt.reference_number ILIKE $1 OR CAST(bt.amount AS TEXT) LIKE $1)`;
+    }
+
+    query += ' ORDER BY bt.date DESC';
+    const result = await pool.query(query, params);
+    res.json(result.rows);
+  } catch (err) {
+    console.error('Error fetching unmatched bank:', err);
+    res.status(500).json({ error: 'Failed to fetch unmatched bank transactions' });
+  }
+});
+
+// GET /api/matching/unmatched-gl - get unmatched GL transactions with optional search
+router.get('/unmatched-gl', async (req: Request, res: Response) => {
+  const search = (req.query.q as string) || '';
+  try {
+    let query = `
+      SELECT gl.* FROM gl_transactions gl
+      WHERE gl.id NOT IN (
+        SELECT gl_tx_id FROM matched_transactions
+        WHERE gl_tx_id IS NOT NULL AND status IN ('matched', 'approved', 'pending')
+      )
+    `;
+    const params: string[] = [];
+
+    if (search) {
+      params.push(`%${search}%`);
+      query += ` AND (gl.description ILIKE $1 OR gl.reference ILIKE $1 OR CAST(gl.amount AS TEXT) LIKE $1)`;
+    }
+
+    query += ' ORDER BY gl.date DESC';
+    const result = await pool.query(query, params);
+    res.json(result.rows);
+  } catch (err) {
+    console.error('Error fetching unmatched GL:', err);
+    res.status(500).json({ error: 'Failed to fetch unmatched GL transactions' });
+  }
+});
+
+// POST /api/matching/manual - manually match a bank tx with a GL tx
+router.post('/manual', async (req: Request, res: Response) => {
+  const { bank_tx_id, gl_tx_id } = req.body;
+
+  if (!bank_tx_id || !gl_tx_id) {
+    return res.status(400).json({ error: 'bank_tx_id and gl_tx_id are required' });
+  }
+
+  try {
+    // Fetch both transactions
+    const bankResult = await pool.query('SELECT * FROM bank_transactions WHERE id = $1', [bank_tx_id]);
+    const glResult = await pool.query('SELECT * FROM gl_transactions WHERE id = $1', [gl_tx_id]);
+
+    if (bankResult.rows.length === 0) return res.status(404).json({ error: 'Bank transaction not found' });
+    if (glResult.rows.length === 0) return res.status(404).json({ error: 'GL transaction not found' });
+
+    const bankTx = bankResult.rows[0];
+    const glTx = glResult.rows[0];
+
+    const bankAmt = Math.abs(parseFloat(bankTx.amount));
+    const glAmt = Math.abs(parseFloat(glTx.amount));
+
+    // Calculate confidence for display (even though manual)
+    const confidence = calculateConfidence(bankAmt, glAmt, bankTx.description, glTx.description);
+
+    // Determine category
+    let category = 'other';
+    const glDesc = (glTx.description || '').toLowerCase();
+    const glSource = (glTx.source || '').toLowerCase();
+    if (glSource.includes('payment') || glSource.includes('cheque') || glSource.includes('check') ||
+        glDesc.includes('cheque') || glDesc.includes('check')) {
+      category = 'cheque';
+    } else if (bankTx.type === 'credit' || glTx.type === 'debit') {
+      category = 'deposit';
+    }
+
+    const flags: string[] = [];
+    if (bankAmt >= HIGH_VALUE_THRESHOLD) flags.push('High Value');
+    if (Math.abs(bankAmt - glAmt) > 0.01) flags.push('Amount Mismatch');
+
+    const id = generateId('MATCH');
+    const result = await pool.query(
+      `INSERT INTO matched_transactions
+       (id, bank_tx_id, gl_tx_id, bank_desc, gl_desc, amount, bank_amount, gl_amount,
+        date, bank_name, confidence, match_type, status, category, flags)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'manual', 'pending', $12, $13)
+       RETURNING *`,
+      [
+        id,
+        bank_tx_id,
+        gl_tx_id,
+        bankTx.description,
+        glTx.description,
+        bankAmt,
+        bankAmt,
+        glAmt,
+        bankTx.date,
+        bankTx.bank_name || 'BOC',
+        Math.round(confidence),
+        category,
+        JSON.stringify(flags),
+      ]
+    );
+
+    res.json(result.rows[0]);
+  } catch (err: any) {
+    // Handle duplicate match (unique constraint on bank_tx_id or gl_tx_id)
+    if (err.code === '23505') {
+      return res.status(409).json({ error: 'One of these transactions is already matched' });
+    }
+    console.error('Error creating manual match:', err);
+    res.status(500).json({ error: 'Failed to create manual match' });
+  }
+});
+
 export default router;
