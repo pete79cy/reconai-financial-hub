@@ -553,7 +553,7 @@ router.get('/unmatched-bank', async (req: Request, res: Response) => {
       SELECT bt.* FROM bank_transactions bt
       WHERE bt.id NOT IN (
         SELECT bank_tx_id FROM matched_transactions
-        WHERE bank_tx_id IS NOT NULL AND status IN ('matched', 'approved', 'pending')
+        WHERE bank_tx_id IS NOT NULL AND status IN ('matched', 'approved')
       )
     `;
     const params: string[] = [];
@@ -608,6 +608,13 @@ router.post('/manual', async (req: Request, res: Response) => {
   }
 
   try {
+    // Remove any existing pending/rejected matches for these transactions
+    await pool.query(
+      `DELETE FROM matched_transactions
+       WHERE (bank_tx_id = $1 OR gl_tx_id = $2) AND status IN ('pending', 'rejected', 'unmatched')`,
+      [bank_tx_id, gl_tx_id]
+    );
+
     // Fetch both transactions
     const bankResult = await pool.query('SELECT * FROM bank_transactions WHERE id = $1', [bank_tx_id]);
     const glResult = await pool.query('SELECT * FROM gl_transactions WHERE id = $1', [gl_tx_id]);
