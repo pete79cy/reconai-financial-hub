@@ -649,9 +649,9 @@ router.post('/manual', async (req: Request, res: Response) => {
     const id = generateId('MATCH');
     const result = await pool.query(
       `INSERT INTO matched_transactions
-       (id, bank_tx_id, gl_tx_id, bank_desc, gl_desc, amount, bank_amount, gl_amount,
-        date, bank_name, confidence, match_type, status, category, flags)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'manual', 'pending', $12, $13)
+       (id, bank_tx_id, gl_tx_id, bank_desc, gl_desc, amount,
+        date, bank_name, confidence, match_type, status, match_category, flags)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'Manual', 'pending', $10, $11)
        RETURNING *`,
       [
         id,
@@ -660,13 +660,11 @@ router.post('/manual', async (req: Request, res: Response) => {
         bankTx.description,
         glTx.description,
         bankAmt,
-        bankAmt,
-        glAmt,
         bankTx.date,
         bankTx.bank_name || 'BOC',
         Math.round(confidence),
         category,
-        JSON.stringify(flags),
+        flags,
       ]
     );
 
