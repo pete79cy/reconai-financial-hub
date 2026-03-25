@@ -11,6 +11,10 @@ import {
   Link2,
   CheckCircle2,
   X,
+  Sparkles,
+  Loader2,
+  Brain,
+  Zap,
 } from 'lucide-react';
 import { TopBar } from '@/components/layout/TopBar';
 import { StatusBadge } from '@/components/badges/StatusBadge';
@@ -87,6 +91,107 @@ export default function Matching() {
   const [selectedBankTx, setSelectedBankTx] = useState<UnmatchedTx | null>(null);
   const [selectedGLTx, setSelectedGLTx] = useState<UnmatchedTx | null>(null);
   const [loadingManual, setLoadingManual] = useState(false);
+
+  // AI Suggestions state
+  interface AISuggestion {
+    bank_tx_id: string;
+    gl_tx_id: string;
+    confidence: number;
+    reasoning: string;
+    bank_desc: string;
+    gl_desc: string;
+    bank_amount: number;
+    gl_amount: number;
+    bank_date: string;
+    gl_date: string;
+  }
+  const [aiSuggestions, setAiSuggestions] = useState<AISuggestion[]>([]);
+  const [loadingAI, setLoadingAI] = useState(false);
+  const [aiError, setAiError] = useState<string | null>(null);
+  const [aiTokensUsed, setAiTokensUsed] = useState(0);
+
+  // Set of GL tx IDs that AI suggested (for highlighting)
+  const aiSuggestedGLIds = useMemo(() => {
+    const set = new Set<string>();
+    aiSuggestions.forEach(s => set.add(s.gl_tx_id));
+    return set;
+  }, [aiSuggestions]);
+
+  // Get AI suggestion for a specific GL tx
+  const getAISuggestionForGL = useCallback((glId: string) => {
+    return aiSuggestions.find(s => s.gl_tx_id === glId);
+  }, [aiSuggestions]);
+
+  const handleAISuggest = async () => {
+    if (!selectedBankTx) {
+      toast.error('Select a bank transaction first');
+      return;
+    }
+    setLoadingAI(true);
+    setAiError(null);
+    setAiSuggestions([]);
+    try {
+      const res = await fetch('/api/ai/suggest', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ bank_tx_id: selectedBankTx.id }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setAiSuggestions(data.suggestions || []);
+        setAiTokensUsed(data.tokens_used || 0);
+        if (data.suggestions?.length === 0) {
+          toast.info('AI found no confident matches for this transaction');
+        } else {
+          toast.success(`AI found ${data.suggestions.length} potential matches`);
+        }
+      } else {
+        const err = await res.json();
+        setAiError(err.error || 'AI suggestion failed');
+        toast.error(err.error || 'AI suggestion failed');
+      }
+    } catch {
+      setAiError('Failed to connect to AI service');
+      toast.error('Failed to connect to AI service');
+    } finally {
+      setLoadingAI(false);
+    }
+  };
+
+  const handleAIBatchSuggest = async () => {
+    setLoadingAI(true);
+    setAiError(null);
+    setAiSuggestions([]);
+    try {
+      const res = await fetch('/api/ai/suggest-batch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setAiSuggestions(data.suggestions || []);
+        setAiTokensUsed(data.tokens_used || 0);
+        if (data.suggestions?.length === 0) {
+          toast.info('AI found no confident matches');
+        } else {
+          toast.success(`AI found ${data.suggestions.length} potential matches`);
+        }
+      } else {
+        const err = await res.json();
+        toast.error(err.error || 'AI batch suggestion failed');
+      }
+    } catch {
+      toast.error('Failed to connect to AI service');
+    } finally {
+      setLoadingAI(false);
+    }
+  };
+
+  // Clear AI suggestions when bank selection changes
+  useEffect(() => {
+    setAiSuggestions([]);
+    setAiError(null);
+  }, [selectedBankTx?.id]);
 
   const fetchUnmatched = useCallback(async () => {
     try {
@@ -266,9 +371,94 @@ export default function Matching() {
           </button>
         </div>
 
+        {/* AI Batch button (only in manual tab) */}
+        {mainTab === 'manual' && (
+          <div className="flex items-center gap-2 mb-4">
+            <Button
+              onClick={handleAIBatchSuggest}
+              disabled={loadingAI}
+              variant="outline"
+              size="sm"
+              className="gap-2 border-violet-500/30 text-violet-400 hover:bg-violet-500/10"
+            >
+              {loadingAI ? (
+                <Loader2 className="w-4 h-4 animate-spin" />
+              ) : (
+                <Zap className="w-4 h-4" />
+              )}
+              {loadingAI ? 'AI analyzing all unmatched...' : 'AI Match All Unmatched'}
+            </Button>
+            {aiSuggestions.length > 0 && (
+              <span className="text-xs text-muted-foreground">
+                {aiSuggestions.length} suggestions · {aiTokensUsed} tokens used
+              </span>
+            )}
+          </div>
+        )}
+
         {mainTab === 'manual' ? (
           /* ====== Manual Match View ====== */
           <div className="space-y-4">
+            {/* AI Suggestions Banner */}
+            {aiSuggestions.length > 0 && (
+              <motion.div
+                initial={{ opacity: 0, y: -10 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="bg-gradient-to-r from-violet-500/10 via-purple-500/10 to-fuchsia-500/10 border border-violet-500/30 rounded-xl p-4"
+              >
+                <div className="flex items-center justify-between mb-3">
+                  <div className="flex items-center gap-2">
+                    <Brain className="w-5 h-5 text-violet-400" />
+                    <h3 className="text-sm font-semibold text-foreground">AI Suggestions</h3>
+                    <span className="text-xs text-muted-foreground">({aiSuggestions.length} matches found · {aiTokensUsed} tokens)</span>
+                  </div>
+                  <button onClick={() => setAiSuggestions([])} className="p-1 rounded hover:bg-white/10 text-muted-foreground hover:text-foreground">
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+                <div className="space-y-2">
+                  {aiSuggestions.map((s, i) => (
+                    <div
+                      key={`${s.bank_tx_id}-${s.gl_tx_id}`}
+                      onClick={() => {
+                        // Auto-select bank and GL transactions
+                        const bankTx = unmatchedBank.find(b => b.id === s.bank_tx_id);
+                        const glTx = unmatchedGL.find(g => g.id === s.gl_tx_id);
+                        if (bankTx) setSelectedBankTx(bankTx);
+                        if (glTx) setSelectedGLTx(glTx);
+                      }}
+                      className="flex items-center gap-3 p-3 rounded-lg bg-card/50 border border-border/50 cursor-pointer hover:bg-card hover:border-violet-500/30 transition-all"
+                    >
+                      <div className="flex items-center justify-center w-8 h-8 rounded-full bg-violet-500/20 text-violet-400 font-bold text-sm shrink-0">
+                        {i + 1}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 mb-1">
+                          <span className="text-xs font-medium text-blue-400 truncate max-w-[200px]">{s.bank_desc}</span>
+                          <span className="text-muted-foreground">→</span>
+                          <span className="text-xs font-medium text-emerald-400 truncate max-w-[200px]">{s.gl_desc}</span>
+                        </div>
+                        <p className="text-xs text-muted-foreground">{s.reasoning}</p>
+                      </div>
+                      <div className="flex items-center gap-3 shrink-0">
+                        <div className="text-right">
+                          <div className="text-xs text-muted-foreground">Bank: {formatCurrency(s.bank_amount)}</div>
+                          <div className="text-xs text-muted-foreground">GL: {formatCurrency(s.gl_amount)}</div>
+                        </div>
+                        <div className={`flex items-center justify-center w-12 h-12 rounded-lg font-bold text-sm ${
+                          s.confidence >= 80 ? 'bg-emerald-500/20 text-emerald-400' :
+                          s.confidence >= 60 ? 'bg-yellow-500/20 text-yellow-400' :
+                          'bg-orange-500/20 text-orange-400'
+                        }`}>
+                          {s.confidence}%
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </motion.div>
+            )}
+
             {/* Selected pair + match button */}
             {(selectedBankTx || selectedGLTx) && (
               <motion.div
@@ -278,15 +468,33 @@ export default function Matching() {
               >
                 <div className="flex items-center justify-between mb-3">
                   <h3 className="text-sm font-semibold text-foreground">Selected for matching</h3>
-                  <Button
-                    onClick={handleManualMatch}
-                    disabled={!selectedBankTx || !selectedGLTx || loadingManual}
-                    size="sm"
-                    className="gap-2"
-                  >
-                    <Link2 className="w-4 h-4" />
-                    {loadingManual ? 'Matching...' : 'Create Match'}
-                  </Button>
+                  <div className="flex items-center gap-2">
+                    {selectedBankTx && !selectedGLTx && (
+                      <Button
+                        onClick={handleAISuggest}
+                        disabled={loadingAI}
+                        size="sm"
+                        variant="outline"
+                        className="gap-2 border-violet-500/30 text-violet-400 hover:bg-violet-500/10"
+                      >
+                        {loadingAI ? (
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                        ) : (
+                          <Sparkles className="w-4 h-4" />
+                        )}
+                        {loadingAI ? 'Analyzing...' : 'AI Suggest'}
+                      </Button>
+                    )}
+                    <Button
+                      onClick={handleManualMatch}
+                      disabled={!selectedBankTx || !selectedGLTx || loadingManual}
+                      size="sm"
+                      className="gap-2"
+                    >
+                      <Link2 className="w-4 h-4" />
+                      {loadingManual ? 'Matching...' : 'Create Match'}
+                    </Button>
+                  </div>
                 </div>
                 <div className="grid grid-cols-2 gap-4">
                   <div className={`rounded-lg p-3 border ${selectedBankTx ? 'border-blue-500/30 bg-blue-500/5' : 'border-dashed border-border bg-muted/20'}`}>
@@ -430,21 +638,47 @@ export default function Matching() {
                         </tr>
                       </thead>
                       <tbody>
-                        {unmatchedGL.map((tx) => (
+                        {unmatchedGL.map((tx) => {
+                          const aiSugg = getAISuggestionForGL(tx.id);
+                          const isAISuggested = !!aiSugg;
+                          return (
                           <tr
                             key={tx.id}
                             onClick={() => setSelectedGLTx(tx)}
                             className={`cursor-pointer border-b border-border/50 hover:bg-emerald-500/10 transition-colors ${
-                              selectedGLTx?.id === tx.id ? 'bg-emerald-500/15 ring-1 ring-inset ring-emerald-500/30' : ''
+                              selectedGLTx?.id === tx.id ? 'bg-emerald-500/15 ring-1 ring-inset ring-emerald-500/30' :
+                              isAISuggested ? 'bg-violet-500/10 ring-1 ring-inset ring-violet-500/20' : ''
                             }`}
                           >
-                            <td className="px-3 py-2 text-muted-foreground whitespace-nowrap">{formatDate(tx.date)}</td>
-                            <td className="px-3 py-2 text-foreground max-w-[200px] truncate">{tx.description}</td>
+                            <td className="px-3 py-2 text-muted-foreground whitespace-nowrap">
+                              <div className="flex items-center gap-1.5">
+                                {isAISuggested && (
+                                  <span className={`inline-flex items-center justify-center w-5 h-5 rounded-full text-[10px] font-bold shrink-0 ${
+                                    aiSugg!.confidence >= 80 ? 'bg-emerald-500/20 text-emerald-400' :
+                                    aiSugg!.confidence >= 60 ? 'bg-yellow-500/20 text-yellow-400' :
+                                    'bg-orange-500/20 text-orange-400'
+                                  }`} title={aiSugg!.reasoning}>
+                                    {aiSugg!.confidence}
+                                  </span>
+                                )}
+                                {formatDate(tx.date)}
+                              </div>
+                            </td>
+                            <td className="px-3 py-2 text-foreground max-w-[200px]">
+                              <div className="truncate">{tx.description}</div>
+                              {isAISuggested && (
+                                <div className="text-[10px] text-violet-400 mt-0.5 flex items-center gap-1">
+                                  <Sparkles className="w-3 h-3" />
+                                  {aiSugg!.reasoning}
+                                </div>
+                              )}
+                            </td>
                             <td className="px-3 py-2 text-muted-foreground font-mono text-xs">{tx.reference || '-'}</td>
                             <td className="px-3 py-2 text-right font-mono font-medium text-foreground">{formatCurrency(Math.abs(parseFloat(String(tx.amount))))}</td>
                             <td className="px-3 py-2 text-muted-foreground text-xs">{tx.source || '-'}</td>
                           </tr>
-                        ))}
+                          );
+                        })}
                       </tbody>
                     </table>
                   )}

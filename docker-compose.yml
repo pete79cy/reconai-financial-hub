@@ -16,6 +16,7 @@ services:
     environment:
       - DATABASE_URL=postgresql://MbELlVpssTiWnG32:QsLYt3xY563h1DrgJlmxMy6vBfsGKOXY@postgresql-dere-postgresql-1:5432/LJVtsBRb1UVXidr9
       - PORT=4000
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
     restart: unless-stopped
     networks:
       - reconai
