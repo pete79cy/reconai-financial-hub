@@ -593,34 +593,65 @@ router.get('/unmatched-bank', async (req: Request, res: Response) => {
   }
 });
 
-// GET /api/matching/unmatched-gl - get unmatched GL transactions with optional search
+// GET /api/matching/unmatched-gl - get unmatched GL transactions + outstanding items
 router.get('/unmatched-gl', async (req: Request, res: Response) => {
   const search = (req.query.q as string) || '';
   try {
-    let query = `
-      SELECT gl.* FROM gl_transactions gl
+    // 1. Get unmatched GL transactions from current period
+    let glQuery = `
+      SELECT gl.id, gl.date, gl.description, gl.amount, gl.type, gl.source,
+             gl.sequence AS reference, 'gl' AS record_source
+      FROM gl_transactions gl
       WHERE gl.id NOT IN (
         SELECT gl_tx_id FROM matched_transactions
         WHERE gl_tx_id IS NOT NULL AND status IN ('matched', 'approved')
       )
     `;
-    const params: string[] = [];
+    const glParams: string[] = [];
 
     if (search) {
-      params.push(`%${search}%`);
-      query += ` AND (gl.description ILIKE $1 OR gl.reference ILIKE $1 OR CAST(gl.amount AS TEXT) LIKE $1)`;
+      glParams.push(`%${search}%`);
+      glQuery += ` AND (gl.description ILIKE $1 OR gl.reference ILIKE $1 OR CAST(gl.amount AS TEXT) LIKE $1)`;
     }
 
-    query += ' ORDER BY gl.date DESC';
-    const result = await pool.query(query, params);
-    res.json(result.rows);
+    glQuery += ' ORDER BY gl.date DESC';
+    const glResult = await pool.query(glQuery, glParams);
+
+    // 2. Get outstanding items (cheques from previous months still outstanding)
+    let oiQuery = `
+      SELECT oi.id, oi.date, oi.description, oi.amount, 'credit' AS type,
+             oi.source, oi.reference_number AS reference,
+             'outstanding' AS record_source, oi.period, oi.item_type
+      FROM outstanding_items oi
+      WHERE oi.status = 'outstanding'
+    `;
+    const oiParams: string[] = [];
+
+    if (search) {
+      oiParams.push(`%${search}%`);
+      oiQuery += ` AND (oi.description ILIKE $1 OR oi.reference_number ILIKE $1 OR CAST(oi.amount AS TEXT) LIKE $1)`;
+    }
+
+    oiQuery += ' ORDER BY oi.date DESC';
+    const oiResult = await pool.query(oiQuery, oiParams);
+
+    // Mark outstanding items so frontend can distinguish them
+    const outstandingRows = oiResult.rows.map((row: any) => ({
+      ...row,
+      description: `[Outstanding ${row.item_type}] ${row.description}`,
+      is_outstanding: true,
+    }));
+
+    // Combine: GL transactions first, then outstanding items
+    const combined = [...glResult.rows, ...outstandingRows];
+    res.json(combined);
   } catch (err) {
     console.error('Error fetching unmatched GL:', err);
     res.status(500).json({ error: 'Failed to fetch unmatched GL transactions' });
   }
 });
 
-// POST /api/matching/manual - manually match a bank tx with a GL tx
+// POST /api/matching/manual - manually match a bank tx with a GL tx or outstanding item
 router.post('/manual', async (req: Request, res: Response) => {
   const { bank_tx_id, gl_tx_id } = req.body;
 
@@ -629,61 +660,91 @@ router.post('/manual', async (req: Request, res: Response) => {
   }
 
   try {
-    // Remove any existing pending/rejected matches for these transactions
+    // Check if gl_tx_id is an outstanding item (starts with "OI-")
+    const isOutstanding = gl_tx_id.startsWith('OI-');
+
+    // Fetch bank transaction
+    const bankResult = await pool.query('SELECT * FROM bank_transactions WHERE id = $1', [bank_tx_id]);
+    if (bankResult.rows.length === 0) return res.status(404).json({ error: 'Bank transaction not found' });
+    const bankTx = bankResult.rows[0];
+    const bankAmt = Math.abs(parseFloat(bankTx.amount));
+
+    let glDesc: string;
+    let glAmt: number;
+    let glSource: string;
+    let category: string;
+    let actualGlTxId: string | null = null;
+
+    if (isOutstanding) {
+      // Match with outstanding item — clear it
+      const oiResult = await pool.query('SELECT * FROM outstanding_items WHERE id = $1', [gl_tx_id]);
+      if (oiResult.rows.length === 0) return res.status(404).json({ error: 'Outstanding item not found' });
+      const oi = oiResult.rows[0];
+
+      glDesc = `[Cleared Outstanding] ${oi.description}`;
+      glAmt = Math.abs(parseFloat(oi.amount));
+      glSource = oi.source || '';
+      category = oi.item_type === 'deposit' ? 'deposit' : 'cheque';
+      actualGlTxId = oi.gl_tx_id || null;
+
+      // Mark outstanding item as cleared
+      await pool.query(
+        `UPDATE outstanding_items SET status = 'cleared', cleared_date = CURRENT_DATE WHERE id = $1`,
+        [gl_tx_id]
+      );
+    } else {
+      // Regular GL transaction match
+      const glResult = await pool.query('SELECT * FROM gl_transactions WHERE id = $1', [gl_tx_id]);
+      if (glResult.rows.length === 0) return res.status(404).json({ error: 'GL transaction not found' });
+      const glTx = glResult.rows[0];
+
+      glDesc = glTx.description;
+      glAmt = Math.abs(parseFloat(glTx.amount));
+      glSource = (glTx.source || '').toLowerCase();
+      actualGlTxId = glTx.id;
+
+      category = 'other';
+      const descLower = (glTx.description || '').toLowerCase();
+      if (glSource.includes('payment') || glSource.includes('cheque') || glSource.includes('check') ||
+          descLower.includes('cheque') || descLower.includes('check')) {
+        category = 'cheque';
+      } else if (bankTx.type === 'credit' || glTx.type === 'debit') {
+        category = 'deposit';
+      }
+    }
+
+    // Remove any existing pending/rejected matches for the bank tx
     await pool.query(
       `DELETE FROM matched_transactions
-       WHERE (bank_tx_id = $1 OR gl_tx_id = $2) AND status IN ('pending', 'rejected', 'unmatched')`,
-      [bank_tx_id, gl_tx_id]
+       WHERE bank_tx_id = $1 AND status IN ('pending', 'rejected', 'unmatched')`,
+      [bank_tx_id]
     );
 
-    // Fetch both transactions
-    const bankResult = await pool.query('SELECT * FROM bank_transactions WHERE id = $1', [bank_tx_id]);
-    const glResult = await pool.query('SELECT * FROM gl_transactions WHERE id = $1', [gl_tx_id]);
-
-    if (bankResult.rows.length === 0) return res.status(404).json({ error: 'Bank transaction not found' });
-    if (glResult.rows.length === 0) return res.status(404).json({ error: 'GL transaction not found' });
-
-    const bankTx = bankResult.rows[0];
-    const glTx = glResult.rows[0];
-
-    const bankAmt = Math.abs(parseFloat(bankTx.amount));
-    const glAmt = Math.abs(parseFloat(glTx.amount));
-
-    // Calculate confidence for display (even though manual)
-    const confidence = calculateConfidence(bankAmt, glAmt, bankTx.description, glTx.description);
-
-    // Determine category
-    let category = 'other';
-    const glDesc = (glTx.description || '').toLowerCase();
-    const glSource = (glTx.source || '').toLowerCase();
-    if (glSource.includes('payment') || glSource.includes('cheque') || glSource.includes('check') ||
-        glDesc.includes('cheque') || glDesc.includes('check')) {
-      category = 'cheque';
-    } else if (bankTx.type === 'credit' || glTx.type === 'debit') {
-      category = 'deposit';
-    }
+    const confidence = calculateConfidence(bankAmt, glAmt, bankTx.description, glDesc);
 
     const flags: string[] = [];
     if (bankAmt >= HIGH_VALUE_THRESHOLD) flags.push('High Value');
     if (Math.abs(bankAmt - glAmt) > 0.01) flags.push('Amount Mismatch');
 
     const id = generateId('MATCH');
+    const matchStatus = isOutstanding ? 'matched' : 'pending';
     const result = await pool.query(
       `INSERT INTO matched_transactions
        (id, bank_tx_id, gl_tx_id, bank_desc, gl_desc, amount,
         date, bank_name, confidence, match_type, status, match_category, flags)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'Manual', 'pending', $10, $11)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'Manual', $10, $11, $12)
        RETURNING *`,
       [
         id,
         bank_tx_id,
-        gl_tx_id,
+        actualGlTxId,
         bankTx.description,
-        glTx.description,
+        glDesc,
         bankAmt,
         bankTx.date,
         bankTx.bank_name || 'BOC',
         Math.round(confidence),
+        matchStatus,
         category,
         flags,
       ]
