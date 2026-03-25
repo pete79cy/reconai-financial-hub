@@ -580,7 +580,7 @@ router.get('/unmatched-gl', async (req: Request, res: Response) => {
       SELECT gl.* FROM gl_transactions gl
       WHERE gl.id NOT IN (
         SELECT gl_tx_id FROM matched_transactions
-        WHERE gl_tx_id IS NOT NULL AND status IN ('matched', 'approved', 'pending')
+        WHERE gl_tx_id IS NOT NULL AND status IN ('matched', 'approved')
       )
     `;
     const params: string[] = [];
