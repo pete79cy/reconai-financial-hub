@@ -553,10 +553,14 @@ router.get('/summary', async (req: Request, res: Response) => {
     const proof = adjustedBankBalance - adjustedGLBalance;
 
     // Fetch adjustment line items for display
-    const adjPeriodQ = period ? ` WHERE period = '${period}'` : '';
-    const adjustmentsResult = await pool.query(
-      `SELECT * FROM reconciliation_adjustments${adjPeriodQ} ORDER BY created_at DESC`
-    );
+    const adjustmentsResult = period
+      ? await pool.query(
+          'SELECT * FROM reconciliation_adjustments WHERE period = $1 ORDER BY created_at DESC',
+          [period]
+        )
+      : await pool.query(
+          'SELECT * FROM reconciliation_adjustments ORDER BY created_at DESC'
+        );
 
     res.json({
       period: displayPeriod,
