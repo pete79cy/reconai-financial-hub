@@ -416,8 +416,24 @@ router.get('/summary', async (req: Request, res: Response) => {
     );
     const metadata = metadataResult.rows[0];
 
-    // closing_balance is negative for overdraft; we multiply by -1 to get positive
-    const bankBalance = metadata ? Math.abs(parseFloat(metadata.closing_balance || '0')) : 0;
+    // Check if manual balances are set for this period
+    let manualBankBalance: number | null = null;
+    let manualGlBalance: number | null = null;
+    if (period) {
+      const periodResult = await pool.query(
+        'SELECT bank_balance, gl_balance FROM reconciliation_periods WHERE id = $1',
+        [period]
+      );
+      if (periodResult.rows.length > 0) {
+        const pr = periodResult.rows[0];
+        if (pr.bank_balance !== null) manualBankBalance = parseFloat(pr.bank_balance);
+        if (pr.gl_balance !== null) manualGlBalance = parseFloat(pr.gl_balance);
+      }
+    }
+
+    // Use manual balance if set, otherwise fall back to computed value
+    const computedBankBalance = metadata ? Math.abs(parseFloat(metadata.closing_balance || '0')) : 0;
+    const bankBalance = manualBankBalance !== null ? manualBankBalance : computedBankBalance;
 
     // Determine display period from metadata or query
     const displayPeriod = period
@@ -426,14 +442,15 @@ router.get('/summary', async (req: Request, res: Response) => {
         ? new Date(metadata.period_from).toLocaleString('en-US', { month: 'short', year: 'numeric' })
         : 'Unknown';
 
-    // GL balance: sum all GL debits - sum all GL credits to get net GL balance
+    // GL balance: use manual if set, otherwise compute from transactions
     const glBalanceResult = await pool.query(`
       SELECT
         COALESCE(SUM(CASE WHEN type = 'debit' THEN amount ELSE 0 END), 0) -
         COALESCE(SUM(CASE WHEN type = 'credit' THEN amount ELSE 0 END), 0) as balance
       FROM gl_transactions
     `);
-    const glBalance = parseFloat(glBalanceResult.rows[0].balance || '0');
+    const computedGlBalance = parseFloat(glBalanceResult.rows[0].balance || '0');
+    const glBalance = manualGlBalance !== null ? manualGlBalance : computedGlBalance;
 
     // If a period is specified, use outstanding_items table
     let outstandingChecksList: any[] = [];
@@ -722,6 +739,37 @@ router.delete('/adjustments/:id', async (req: Request, res: Response) => {
   } catch (err) {
     console.error('Error deleting adjustment:', err);
     res.status(500).json({ error: 'Failed to delete adjustment' });
+  }
+});
+
+// POST /api/reconciliation/balances - save manual bank and GL balances
+router.post('/balances', async (req: Request, res: Response) => {
+  const { period, bank_balance, gl_balance } = req.body;
+
+  if (!period) {
+    return res.status(400).json({ error: 'Period is required' });
+  }
+
+  try {
+    // Ensure period exists
+    await pool.query(
+      `INSERT INTO reconciliation_periods (id, status) VALUES ($1, 'open')
+       ON CONFLICT (id) DO NOTHING`,
+      [period]
+    );
+
+    // Update balances
+    await pool.query(
+      `UPDATE reconciliation_periods
+       SET bank_balance = $2, gl_balance = $3
+       WHERE id = $1`,
+      [period, bank_balance ?? null, gl_balance ?? null]
+    );
+
+    res.json({ success: true, period, bank_balance, gl_balance });
+  } catch (err) {
+    console.error('Error saving balances:', err);
+    res.status(500).json({ error: 'Failed to save balances' });
   }
 });
 

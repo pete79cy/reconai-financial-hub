@@ -142,6 +142,9 @@ export default function Reconciliation() {
   const [newPeriodDialogOpen, setNewPeriodDialogOpen] = useState(false);
   const [newPeriodValue, setNewPeriodValue] = useState('');
   const [closingPeriod, setClosingPeriod] = useState(false);
+  const [bankBalanceInput, setBankBalanceInput] = useState('');
+  const [glBalanceInput, setGlBalanceInput] = useState('');
+  const [savingBalances, setSavingBalances] = useState(false);
 
   // Outstanding items for period
   const [periodOutstandingItems, setPeriodOutstandingItems] = useState<OutstandingRecord[]>([]);
@@ -192,6 +195,9 @@ export default function Reconciliation() {
           outstandingOtherList: data.outstandingOtherList || [],
           adjustments: data.adjustments || [],
         });
+        // Populate balance inputs from saved values
+        setBankBalanceInput(data.bankBalance ? String(data.bankBalance) : '');
+        setGlBalanceInput(data.glBalance ? String(data.glBalance) : '');
       } else {
         setSummary(defaultSummary);
       }
@@ -215,6 +221,38 @@ export default function Reconciliation() {
       // API not available
     }
   }, [selectedPeriod]);
+
+  const saveBalances = async () => {
+    if (!selectedPeriod) {
+      toast.error('Select a period first');
+      return;
+    }
+    setSavingBalances(true);
+    try {
+      const bankVal = parseFloat(bankBalanceInput.replace(/,/g, '')) || 0;
+      const glVal = parseFloat(glBalanceInput.replace(/,/g, '')) || 0;
+      const res = await fetch(`/api/reconciliation/balances`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          period: selectedPeriod,
+          bank_balance: bankVal,
+          gl_balance: glVal,
+        }),
+      });
+      if (res.ok) {
+        toast.success('Balances saved');
+        await fetchSummary();
+      } else {
+        const err = await res.json();
+        toast.error(err.error || 'Failed to save balances');
+      }
+    } catch {
+      toast.error('Failed to save balances');
+    } finally {
+      setSavingBalances(false);
+    }
+  };
 
   useEffect(() => {
     fetchSummary();
@@ -801,7 +839,21 @@ export default function Reconciliation() {
                 Bank Side
               </h2>
               <div className="space-y-0">
-                <SummaryLine label="Balance per Bank Statement" amount={summary.bankBalance} isBold />
+                <div className="flex items-center justify-between py-1.5">
+                  <span className="text-sm font-semibold text-foreground">Balance per Bank Statement</span>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="text"
+                      value={bankBalanceInput}
+                      onChange={(e) => setBankBalanceInput(e.target.value)}
+                      onBlur={saveBalances}
+                      onKeyDown={(e) => e.key === 'Enter' && saveBalances()}
+                      placeholder="Enter amount..."
+                      className="w-40 text-right bg-secondary/50 border border-border rounded px-2 py-1 text-sm font-mono font-medium text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+                    />
+                    <span className="text-xs text-muted-foreground">€</span>
+                  </div>
+                </div>
                 <SummaryLine label="Outstanding Deposits" amount={summary.outstandingDeposits} isAdd={true} />
                 <SummaryLine label="Outstanding Checks" amount={summary.outstandingChecks} isAdd={false} />
                 <SummaryLine label="Outstanding Other" amount={summary.outstandingOther} isAdd={false} />
@@ -822,7 +874,21 @@ export default function Reconciliation() {
                 GL Side
               </h2>
               <div className="space-y-0">
-                <SummaryLine label="Balance per G/L" amount={summary.glBalance} isBold />
+                <div className="flex items-center justify-between py-1.5">
+                  <span className="text-sm font-semibold text-foreground">Balance per G/L</span>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="text"
+                      value={glBalanceInput}
+                      onChange={(e) => setGlBalanceInput(e.target.value)}
+                      onBlur={saveBalances}
+                      onKeyDown={(e) => e.key === 'Enter' && saveBalances()}
+                      placeholder="Enter amount..."
+                      className="w-40 text-right bg-secondary/50 border border-border rounded px-2 py-1 text-sm font-mono font-medium text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+                    />
+                    <span className="text-xs text-muted-foreground">€</span>
+                  </div>
+                </div>
                 <SummaryLine label="Fees Not Yet Booked" amount={summary.feesNotBooked} isAdd={true} />
                 <SummaryLine label="Deposit Corrections" amount={summary.depositCorrections} isAdd={true} />
                 <div className="border-t border-border my-2" />
