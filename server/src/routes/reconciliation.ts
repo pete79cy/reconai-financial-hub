@@ -311,6 +311,55 @@ router.post('/outstanding/clear', async (req: Request, res: Response) => {
   }
 });
 
+// PUT /api/reconciliation/outstanding/:id - update an outstanding item
+router.put('/outstanding/:id', async (req: Request, res: Response) => {
+  const { id } = req.params;
+  const { reference_number, date, description, amount, item_type, source } = req.body;
+
+  try {
+    const result = await pool.query(
+      `UPDATE outstanding_items
+       SET reference_number = COALESCE($2, reference_number),
+           date = COALESCE($3, date),
+           description = COALESCE($4, description),
+           amount = COALESCE($5, amount),
+           item_type = COALESCE($6, item_type),
+           source = COALESCE($7, source)
+       WHERE id = $1
+       RETURNING *`,
+      [id, reference_number, date, description, amount, item_type, source]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Outstanding item not found' });
+    }
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error('Error updating outstanding item:', err);
+    res.status(500).json({ error: 'Failed to update outstanding item' });
+  }
+});
+
+// DELETE /api/reconciliation/outstanding/:id - delete an outstanding item
+router.delete('/outstanding/:id', async (req: Request, res: Response) => {
+  const { id } = req.params;
+
+  try {
+    const result = await pool.query(
+      'DELETE FROM outstanding_items WHERE id = $1 RETURNING *',
+      [id]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Outstanding item not found' });
+    }
+    res.json({ deleted: true, item: result.rows[0] });
+  } catch (err) {
+    console.error('Error deleting outstanding item:', err);
+    res.status(500).json({ error: 'Failed to delete outstanding item' });
+  }
+});
+
 // GET /api/reconciliation/outstanding - get outstanding items for a period
 router.get('/outstanding', async (req: Request, res: Response) => {
   const { period } = req.query;
