@@ -118,11 +118,13 @@ router.post('/run', async (_req: Request, res: Response) => {
     const usedBankIds = new Set<string>();
     const usedGLIds = new Set<string>();
     const matches: any[] = [];
+    const clearedOutstandingIds: string[] = [];
 
     // ============================================================
-    // PASS 1: Cheques — match by reference number
-    //   - Amount matches exactly → status: 'matched'
-    //   - Cheque number matches but amount differs → status: 'pending' (needs review)
+    // PASS 0: Presented cheques → check against outstanding items
+    // Bank cheques should be matched against outstanding cheques from
+    // previous months. If found, mark outstanding as cleared and mark
+    // the bank tx as used (it's already reconciled from a prior month).
     // ============================================================
     const chequeBankTxs = bankTxs.filter(bt =>
       bt.transaction_type &&
@@ -130,6 +132,64 @@ router.post('/run', async (_req: Request, res: Response) => {
        bt.transaction_type.toLowerCase().includes('check'))
     );
 
+    // Get ALL outstanding cheques from all periods
+    const outstandingResult = await client.query(
+      `SELECT * FROM outstanding_items WHERE status = 'outstanding' AND item_type = 'cheque'`
+    );
+    const outstandingCheques = outstandingResult.rows;
+
+    for (const bankTx of chequeBankTxs) {
+      if (usedBankIds.has(bankTx.id)) continue;
+      if (!bankTx.reference_number) continue;
+
+      const bankRef = bankTx.reference_number.replace(/\s/g, '');
+
+      // Check if this cheque was outstanding from a previous period
+      const matchingOutstanding = outstandingCheques.find(oi => {
+        if (!oi.reference_number) return false;
+        return oi.reference_number.replace(/\s/g, '') === bankRef;
+      });
+
+      if (matchingOutstanding) {
+        // This cheque was outstanding and has now cleared in the bank
+        usedBankIds.add(bankTx.id);
+        clearedOutstandingIds.push(matchingOutstanding.id);
+
+        // Mark the outstanding item as cleared
+        await client.query(
+          `UPDATE outstanding_items
+           SET status = 'cleared', cleared_date = CURRENT_DATE
+           WHERE id = $1`,
+          [matchingOutstanding.id]
+        );
+
+        // Create a match record for tracking (already reconciled)
+        const bankAmount = parseFloat(bankTx.amount);
+        matches.push({
+          id: generateId('MATCH'),
+          date: bankTx.date,
+          bank_desc: bankTx.description,
+          gl_desc: `[Cleared Outstanding] ${matchingOutstanding.description}`,
+          amount: bankAmount,
+          currency: 'EUR',
+          bank_name: bankTx.bank_name || 'BOC',
+          match_type: '1:1',
+          confidence: 100,
+          status: 'matched',
+          approval_stage: 'none',
+          flags: [],
+          bank_tx_id: bankTx.id,
+          gl_tx_id: matchingOutstanding.gl_tx_id || null,
+          match_category: 'cheque',
+        });
+      }
+    }
+
+    // ============================================================
+    // PASS 1: Remaining cheques → match with current GL by reference
+    //   - Amount matches exactly → status: 'matched'
+    //   - Cheque number matches but amount differs → status: 'pending'
+    // ============================================================
     const paymentGLTxs = glTxs.filter(gl =>
       gl.source && gl.source.toLowerCase().includes('payment')
     );
@@ -154,7 +214,6 @@ router.post('/run', async (_req: Request, res: Response) => {
           const glAmount = parseFloat(glTx.amount);
           const amountDiff = Math.abs(bankAmount - glAmount);
 
-          // Prefer exact amount match, but accept any cheque number match
           if (amountDiff < bestAmountDiff) {
             bestAmountDiff = amountDiff;
             bestMatch = glTx;
@@ -400,9 +459,8 @@ router.post('/run', async (_req: Request, res: Response) => {
     }
 
     // ============================================================
-    // Outstanding check carry-forward logic
+    // Outstanding items: carry-forward and auto-add unmatched GL cheques
     // ============================================================
-    // Derive current period from bank_metadata period_to date
     const metadataResult = await client.query(
       'SELECT * FROM bank_metadata ORDER BY created_at DESC LIMIT 1'
     );
@@ -410,38 +468,6 @@ router.post('/run', async (_req: Request, res: Response) => {
     const currentPeriod = metadata ? derivePeriodFromDate(metadata.period_to) : null;
 
     if (currentPeriod) {
-      const prevPeriod = getPreviousPeriod(currentPeriod);
-
-      // Get outstanding items from previous period that are still outstanding
-      const prevOutstanding = await client.query(
-        `SELECT * FROM outstanding_items WHERE period = $1 AND status = 'outstanding'`,
-        [prevPeriod]
-      );
-
-      // Build a set of reference numbers that appeared in the current bank statement (cheques)
-      const bankRefSet = new Set<string>();
-      for (const bt of bankTxs) {
-        if (bt.reference_number) {
-          bankRefSet.add(bt.reference_number.replace(/\s/g, ''));
-        }
-      }
-
-      // Check each outstanding cheque from previous period
-      for (const item of prevOutstanding.rows) {
-        if (item.item_type === 'cheque' && item.reference_number) {
-          const ref = item.reference_number.replace(/\s/g, '');
-          if (bankRefSet.has(ref)) {
-            // This cheque cleared in the current bank statement
-            await client.query(
-              `UPDATE outstanding_items
-               SET status = 'cleared', cleared_in_period = $2, cleared_date = CURRENT_DATE
-               WHERE id = $1`,
-              [item.id, currentPeriod]
-            );
-          }
-        }
-      }
-
       // Ensure current period exists in reconciliation_periods
       await client.query(
         `INSERT INTO reconciliation_periods (id, status) VALUES ($1, 'open')
@@ -449,8 +475,8 @@ router.post('/run', async (_req: Request, res: Response) => {
         [currentPeriod]
       );
 
-      // For new unmatched GL cheques from the current run, add them to outstanding_items
-      // (only if they don't already exist in outstanding_items for this period)
+      // Note: Outstanding cheques were already cleared in PASS 0 above.
+      // Now auto-add unmatched GL cheques from current period to outstanding.
       const unmatchedGLCheques = glTxs.filter(gl => {
         if (usedGLIds.has(gl.id)) return false;
         const src = (gl.source || '').toLowerCase();
@@ -458,10 +484,9 @@ router.post('/run', async (_req: Request, res: Response) => {
       });
 
       for (const glTx of unmatchedGLCheques) {
-        // Check if already tracked in outstanding_items for this period
         const existing = await client.query(
-          `SELECT id FROM outstanding_items WHERE period = $1 AND gl_tx_id = $2`,
-          [currentPeriod, glTx.id]
+          `SELECT id FROM outstanding_items WHERE gl_tx_id = $1`,
+          [glTx.id]
         );
         if (existing.rows.length === 0) {
           const glRef = extractGLChequeNumber(glTx.description);
@@ -484,7 +509,7 @@ router.post('/run', async (_req: Request, res: Response) => {
         }
       }
 
-      // Also add new unmatched GL deposits to outstanding_items
+      // Auto-add unmatched GL deposits to outstanding
       const unmatchedGLDeposits = glTxs.filter(gl => {
         if (usedGLIds.has(gl.id)) return false;
         if (gl.type !== 'debit') return false;
@@ -494,8 +519,8 @@ router.post('/run', async (_req: Request, res: Response) => {
 
       for (const glTx of unmatchedGLDeposits) {
         const existing = await client.query(
-          `SELECT id FROM outstanding_items WHERE period = $1 AND gl_tx_id = $2`,
-          [currentPeriod, glTx.id]
+          `SELECT id FROM outstanding_items WHERE gl_tx_id = $1`,
+          [glTx.id]
         );
         if (existing.rows.length === 0) {
           await client.query(
@@ -522,11 +547,13 @@ router.post('/run', async (_req: Request, res: Response) => {
 
     const matched = matches.filter(m => m.status === 'matched' || m.status === 'pending').length;
     const unmatched = matches.filter(m => m.status === 'unmatched').length;
+    const clearedOutstanding = clearedOutstandingIds.length;
 
     res.json({
       total: matches.length,
       matched,
       unmatched,
+      clearedOutstanding,
       currentPeriod: currentPeriod || null,
       transactions: matches,
     });
