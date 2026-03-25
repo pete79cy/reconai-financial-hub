@@ -14,7 +14,7 @@ services:
     build: ./server
     container_name: reconai-backend
     environment:
-      - DATABASE_URL=postgresql://MbELlVpssTiWnG32:QsLYt3xY563h1DrgJlmxMy6vBfsGKOXY@postgresql-dere-postgresql-1:5432/LJVtsBRb1UVXidr9
+      - DATABASE_URL=postgresql://PXaqrNYObt81Q6MZ:IQjd9t7NII2SJttPpMNz2wwMb1qPDzxh@postgresql-kjk8-postgresql-1:5432/3DwE8luKqmKZYGJw
       - PORT=4000
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
     restart: unless-stopped
@@ -27,4 +27,4 @@ networks:
     driver: bridge
   pg-net:
     external: true
-    name: postgresql-dere_default
+    name: postgresql-kjk8_default
