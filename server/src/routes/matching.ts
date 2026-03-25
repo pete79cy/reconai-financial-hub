@@ -120,7 +120,9 @@ router.post('/run', async (_req: Request, res: Response) => {
     const matches: any[] = [];
 
     // ============================================================
-    // PASS 1: Cheques (exact match by reference number)
+    // PASS 1: Cheques — match by reference number
+    //   - Amount matches exactly → status: 'matched'
+    //   - Cheque number matches but amount differs → status: 'pending' (needs review)
     // ============================================================
     const chequeBankTxs = bankTxs.filter(bt =>
       bt.transaction_type &&
@@ -138,7 +140,7 @@ router.post('/run', async (_req: Request, res: Response) => {
 
       const bankRef = bankTx.reference_number.replace(/\s/g, '');
       let bestMatch: GLRow | null = null;
-      let bestConfidence = 0;
+      let bestAmountDiff = Infinity;
 
       for (const glTx of paymentGLTxs) {
         if (usedGLIds.has(glTx.id)) continue;
@@ -152,15 +154,9 @@ router.post('/run', async (_req: Request, res: Response) => {
           const glAmount = parseFloat(glTx.amount);
           const amountDiff = Math.abs(bankAmount - glAmount);
 
-          let confidence: number;
-          if (amountDiff < 0.01) {
-            confidence = 100;
-          } else {
-            confidence = 90;
-          }
-
-          if (confidence > bestConfidence) {
-            bestConfidence = confidence;
+          // Prefer exact amount match, but accept any cheque number match
+          if (amountDiff < bestAmountDiff) {
+            bestAmountDiff = amountDiff;
             bestMatch = glTx;
           }
         }
@@ -170,22 +166,27 @@ router.post('/run', async (_req: Request, res: Response) => {
         usedBankIds.add(bankTx.id);
         usedGLIds.add(bestMatch.id);
 
-        const amount = parseFloat(bankTx.amount);
+        const bankAmount = parseFloat(bankTx.amount);
+        const glAmount = parseFloat(bestMatch.amount);
+        const amountDiff = Math.abs(bankAmount - glAmount);
+        const amountMatches = amountDiff < 0.01;
+
         const flags: string[] = [];
-        if (rules.high_value && amount > HIGH_VALUE_THRESHOLD) flags.push('High Value');
+        if (rules.high_value && bankAmount > HIGH_VALUE_THRESHOLD) flags.push('High Value');
         if (rules.weekend_alert && isWeekend(bankTx.date)) flags.push('Weekend');
+        if (!amountMatches) flags.push('Amount Mismatch');
 
         matches.push({
           id: generateId('MATCH'),
           date: bankTx.date,
           bank_desc: bankTx.description,
           gl_desc: bestMatch.description,
-          amount,
+          amount: bankAmount,
           currency: 'EUR',
           bank_name: bankTx.bank_name || 'BOC',
           match_type: '1:1',
-          confidence: bestConfidence,
-          status: 'matched',
+          confidence: amountMatches ? 100 : 70,
+          status: amountMatches ? 'matched' : 'pending',
           approval_stage: 'none',
           flags,
           bank_tx_id: bankTx.id,
@@ -196,7 +197,7 @@ router.post('/run', async (_req: Request, res: Response) => {
     }
 
     // ============================================================
-    // PASS 2: Deposits (match by amount + date)
+    // PASS 2: Deposits — exact amount match only → status: 'matched'
     // ============================================================
     const depositBankTxs = bankTxs.filter(bt => {
       if (usedBankIds.has(bt.id)) return false;
@@ -218,7 +219,7 @@ router.post('/run', async (_req: Request, res: Response) => {
       const bankAmount = parseFloat(bankTx.amount);
       const bankDate = new Date(bankTx.date);
       let bestMatch: GLRow | null = null;
-      let bestConfidence = 0;
+      let bestDaysDiff = Infinity;
 
       for (const glTx of depositGLTxs) {
         if (usedGLIds.has(glTx.id)) continue;
@@ -226,7 +227,7 @@ router.post('/run', async (_req: Request, res: Response) => {
         const glAmount = parseFloat(glTx.amount);
         const amountDiff = Math.abs(bankAmount - glAmount);
 
-        // Must be exact amount match
+        // Only exact amount matches
         if (amountDiff >= 0.01) continue;
 
         const glDate = new Date(glTx.date);
@@ -234,19 +235,8 @@ router.post('/run', async (_req: Request, res: Response) => {
 
         if (daysDiff > 5) continue;
 
-        let confidence: number;
-        if (daysDiff < 1) {
-          confidence = 98;
-        } else if (daysDiff <= 1) {
-          confidence = 90;
-        } else if (daysDiff <= 3) {
-          confidence = 80;
-        } else {
-          confidence = 70;
-        }
-
-        if (confidence > bestConfidence) {
-          bestConfidence = confidence;
+        if (daysDiff < bestDaysDiff) {
+          bestDaysDiff = daysDiff;
           bestMatch = glTx;
         }
       }
@@ -255,9 +245,8 @@ router.post('/run', async (_req: Request, res: Response) => {
         usedBankIds.add(bankTx.id);
         usedGLIds.add(bestMatch.id);
 
-        const amount = bankAmount;
         const flags: string[] = [];
-        if (rules.high_value && amount > HIGH_VALUE_THRESHOLD) flags.push('High Value');
+        if (rules.high_value && bankAmount > HIGH_VALUE_THRESHOLD) flags.push('High Value');
         if (rules.weekend_alert && isWeekend(bankTx.date)) flags.push('Weekend');
 
         matches.push({
@@ -265,11 +254,11 @@ router.post('/run', async (_req: Request, res: Response) => {
           date: bankTx.date,
           bank_desc: bankTx.description,
           gl_desc: bestMatch.description,
-          amount,
+          amount: bankAmount,
           currency: 'EUR',
           bank_name: bankTx.bank_name || 'BOC',
           match_type: '1:1',
-          confidence: bestConfidence,
+          confidence: 95,
           status: 'matched',
           approval_stage: 'none',
           flags,
@@ -281,30 +270,36 @@ router.post('/run', async (_req: Request, res: Response) => {
     }
 
     // ============================================================
-    // PASS 3: Fuzzy match (all remaining unmatched)
+    // PASS 3: All remaining — exact amount match only → status: 'matched'
+    // No fuzzy matching — anything without exact amount goes to manual
     // ============================================================
     for (const bankTx of bankTxs) {
       if (usedBankIds.has(bankTx.id)) continue;
 
+      const bankAmount = parseFloat(bankTx.amount);
       let bestMatch: GLRow | null = null;
       let bestConfidence = 0;
 
       for (const glTx of glTxs) {
         if (usedGLIds.has(glTx.id)) continue;
 
-        // Bank and GL types are mirrored in reconciliation:
-        // Bank debit (money out) = GL credit (decrease in asset)
-        // Bank credit (money in) = GL debit (increase in asset)
+        // Bank and GL types are mirrored in reconciliation
         if (bankTx.type === glTx.type) continue;
 
+        const glAmount = parseFloat(glTx.amount);
+        const amountDiff = Math.abs(bankAmount - glAmount);
+
+        // Only exact amount matches auto-match
+        if (amountDiff >= 0.01) continue;
+
         const confidence = calculateConfidence(
-          parseFloat(bankTx.amount),
-          parseFloat(glTx.amount),
+          bankAmount,
+          glAmount,
           bankTx.description,
           glTx.description
         );
 
-        if (confidence > bestConfidence && confidence >= CONFIDENCE_AUTO_MATCH_MIN) {
+        if (confidence > bestConfidence) {
           bestConfidence = confidence;
           bestMatch = glTx;
         }
@@ -314,9 +309,8 @@ router.post('/run', async (_req: Request, res: Response) => {
         usedBankIds.add(bankTx.id);
         usedGLIds.add(bestMatch.id);
 
-        const amount = parseFloat(bankTx.amount);
         const flags: string[] = [];
-        if (rules.high_value && amount > HIGH_VALUE_THRESHOLD) flags.push('High Value');
+        if (rules.high_value && bankAmount > HIGH_VALUE_THRESHOLD) flags.push('High Value');
         if (rules.weekend_alert && isWeekend(bankTx.date)) flags.push('Weekend');
 
         matches.push({
@@ -324,12 +318,12 @@ router.post('/run', async (_req: Request, res: Response) => {
           date: bankTx.date,
           bank_desc: bankTx.description,
           gl_desc: bestMatch.description,
-          amount,
+          amount: bankAmount,
           currency: 'EUR',
           bank_name: bankTx.bank_name || 'BOC',
-          match_type: bestConfidence >= CONFIDENCE_HIGH ? '1:1' : 'Manual',
+          match_type: '1:1',
           confidence: bestConfidence,
-          status: bestConfidence >= CONFIDENCE_MEDIUM ? 'matched' : 'pending',
+          status: 'matched',
           approval_stage: 'none',
           flags,
           bank_tx_id: bankTx.id,
@@ -553,7 +547,7 @@ router.get('/unmatched-bank', async (req: Request, res: Response) => {
       SELECT bt.* FROM bank_transactions bt
       WHERE bt.id NOT IN (
         SELECT bank_tx_id FROM matched_transactions
-        WHERE bank_tx_id IS NOT NULL AND status IN ('matched', 'approved', 'pending')
+        WHERE bank_tx_id IS NOT NULL AND status IN ('matched', 'approved')
       )
     `;
     const params: string[] = [];
@@ -580,7 +574,7 @@ router.get('/unmatched-gl', async (req: Request, res: Response) => {
       SELECT gl.* FROM gl_transactions gl
       WHERE gl.id NOT IN (
         SELECT gl_tx_id FROM matched_transactions
-        WHERE gl_tx_id IS NOT NULL AND status IN ('matched', 'approved', 'pending')
+        WHERE gl_tx_id IS NOT NULL AND status IN ('matched', 'approved')
       )
     `;
     const params: string[] = [];
