@@ -333,32 +333,65 @@ export default function Reconciliation() {
         const workbook = XLSX.read(data, { type: 'array' });
         const sheetName = workbook.SheetNames[0];
         const sheet = workbook.Sheets[sheetName];
-        const jsonRows: any[] = XLSX.utils.sheet_to_json(sheet, { defval: '' });
+        // Use header:1 to get raw rows, then find the real header row
+        const rawRows: any[][] = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
 
-        // Map Excel columns to our format
-        // Expected columns: Ref No., Date, Explanation/Payee, Amount
-        const parsed = jsonRows.map((row) => {
-          // Try various column name patterns
-          const refNo =
-            row['Ref No.'] || row['Ref No'] || row['Reference'] || row['Cheque No'] ||
-            row['Check No'] || row['ref_no'] || '';
-          const date =
-            row['Date'] || row['date'] || '';
-          const description =
-            row['Explanation/Payee'] || row['Explanation'] || row['Payee'] ||
-            row['Description'] || row['description'] || '';
-          const amount =
-            row['Amount'] || row['amount'] || 0;
+        // Find the header row (first row that contains 'Ref' or 'Amount' or 'Date')
+        let headerIdx = -1;
+        for (let i = 0; i < Math.min(10, rawRows.length); i++) {
+          const row = rawRows[i];
+          if (!row || row.length === 0) continue;
+          const rowStr = row.map((c: any) => String(c).toLowerCase()).join('|');
+          if (rowStr.includes('ref') || rowStr.includes('amount') || rowStr.includes('date')) {
+            headerIdx = i;
+            break;
+          }
+        }
+
+        if (headerIdx === -1) {
+          toast.error('Could not find header row in Excel file');
+          return;
+        }
+
+        const headers = rawRows[headerIdx].map((h: any) => String(h).trim());
+        const dataRows = rawRows.slice(headerIdx + 1);
+
+        // Build column index map (case-insensitive)
+        const colIdx = (patterns: string[]) => {
+          for (const p of patterns) {
+            const idx = headers.findIndex((h: string) => h.toLowerCase().includes(p.toLowerCase()));
+            if (idx !== -1) return idx;
+          }
+          return -1;
+        };
+
+        const refCol = colIdx(['Ref No', 'Reference', 'Cheque No', 'Check No']);
+        const dateCol = colIdx(['Date']);
+        const descCol = colIdx(['Explanation', 'Payee', 'Description']);
+        const amountCol = colIdx(['Amount']);
+        const srcCol = colIdx(['Src', 'Source']);
+
+        // Map data rows to our format
+        const parsed = dataRows.map((row: any[]) => {
+          const refNo = refCol >= 0 ? row[refCol] : '';
+          const date = dateCol >= 0 ? row[dateCol] : '';
+          const description = descCol >= 0 ? row[descCol] : '';
+          const rawAmount = amountCol >= 0 ? row[amountCol] : 0;
+          const src = srcCol >= 0 ? row[srcCol] : '';
+
+          const amount = typeof rawAmount === 'number'
+            ? rawAmount
+            : parseFloat(String(rawAmount).replace(/,/g, '')) || 0;
 
           return {
-            reference_number: String(refNo).trim(),
+            reference_number: String(refNo || '').trim(),
             date: date ? formatExcelDate(date) : null,
-            description: String(description).trim(),
-            amount: typeof amount === 'number' ? amount : parseFloat(String(amount).replace(/,/g, '')) || 0,
-            item_type: 'cheque',
-            source: 'Excel Import',
+            description: String(description || '').trim(),
+            amount,
+            item_type: 'cheque' as const,
+            source: String(src || 'Excel Import').trim() || 'Excel Import',
           };
-        }).filter(item => item.amount !== 0);
+        }).filter((item: any) => item.amount !== 0);
 
         setImportParsedItems(parsed);
       } catch {
