@@ -544,25 +544,34 @@ router.get('/summary', async (req: Request, res: Response) => {
       outstandingOther += amt;
     }
 
-    // 4. Add carried-forward outstanding items from previous periods
-    //    that haven't been cleared yet
+    // 4. Add ALL outstanding_items that are still 'outstanding'
+    //    These include:
+    //    - Imported outstanding cheques from previous months
+    //    - Auto-added outstanding items from prior matching runs
+    //    Exclude any whose gl_tx_id is already counted above (to avoid double-counting)
+    const alreadyCountedGlIds = new Set([
+      ...unmatchedGLChecks.rows.map((r: any) => r.id),
+      ...unmatchedGLDeposits.rows.map((r: any) => r.id),
+      ...unmatchedGLOther.rows.map((r: any) => r.id),
+    ]);
+
     const carriedForward = await pool.query(`
       SELECT oi.* FROM outstanding_items oi
       WHERE oi.status = 'outstanding'
-        AND oi.gl_tx_id NOT IN (
-          SELECT id FROM gl_transactions
-        )
       ORDER BY oi.date ASC
     `);
     for (const item of carriedForward.rows) {
+      // Skip if this outstanding item's GL tx is already counted from gl_transactions
+      if (item.gl_tx_id && alreadyCountedGlIds.has(item.gl_tx_id)) continue;
+
       const amt = Math.abs(parseFloat(item.amount));
       const mapped = {
         id: item.id,
         date: item.date,
-        description: `[Prior period] ${item.description || ''}`,
+        description: item.description || '',
         amount: amt,
         reference: item.reference_number || '',
-        source_period: item.source_period,
+        source_period: item.source_period || item.period,
         item_type: item.item_type,
       };
       if (item.item_type === 'deposit') {
