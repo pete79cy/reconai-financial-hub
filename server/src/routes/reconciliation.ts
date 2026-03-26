@@ -452,7 +452,14 @@ router.get('/summary', async (req: Request, res: Response) => {
     const computedGlBalance = parseFloat(glBalanceResult.rows[0].balance || '0');
     const glBalance = manualGlBalance !== null ? manualGlBalance : computedGlBalance;
 
-    // If a period is specified, use outstanding_items table
+    // ============================================================
+    // Compute Outstanding Items directly from unmatched GL transactions
+    // Outstanding = GL items NOT matched to any bank transaction
+    // This is the single source of truth for the reconciliation proof.
+    //
+    // Also include outstanding_items from previous periods that are
+    // still outstanding (not yet cleared by bank).
+    // ============================================================
     let outstandingChecksList: any[] = [];
     let outstandingDepositsList: any[] = [];
     let outstandingOtherList: any[] = [];
@@ -460,156 +467,114 @@ router.get('/summary', async (req: Request, res: Response) => {
     let outstandingChecks = 0;
     let outstandingOther = 0;
 
-    if (period) {
-      // Get outstanding items from the outstanding_items table for this period
-      const outstandingItemsResult = await pool.query(
-        `SELECT * FROM outstanding_items WHERE period = $1 AND status = 'outstanding' ORDER BY date ASC`,
-        [period]
-      );
+    // 1. GL Cheques not matched to bank (Payment source = cheques)
+    const unmatchedGLChecks = await pool.query(`
+      SELECT gl.id, gl.date, gl.description, gl.amount, gl.type, gl.source, gl.sequence
+      FROM gl_transactions gl
+      WHERE (gl.source ILIKE '%payment%' OR gl.source ILIKE '%cheque%' OR gl.source ILIKE '%check%')
+        AND gl.id NOT IN (
+          SELECT gl_tx_id FROM matched_transactions
+          WHERE gl_tx_id IS NOT NULL AND status IN ('matched', 'approved')
+        )
+      ORDER BY gl.date ASC
+    `);
+    for (const row of unmatchedGLChecks.rows) {
+      const amt = Math.abs(parseFloat(row.amount));
+      outstandingChecksList.push({
+        id: row.id,
+        date: row.date,
+        description: row.description,
+        amount: amt,
+        reference: row.sequence || '',
+        source: row.source,
+        item_type: 'cheque',
+      });
+      outstandingChecks += amt;
+    }
 
-      for (const item of outstandingItemsResult.rows) {
-        const amt = parseFloat(item.amount);
-        const mapped = {
-          id: item.id,
-          date: item.date,
-          description: item.description || '',
-          amount: amt,
-          reference: item.reference_number || '',
-          source_period: item.source_period,
-          item_type: item.item_type,
-        };
-        if (item.item_type === 'deposit') {
-          outstandingDepositsList.push(mapped);
-          outstandingDeposits += amt;
-        } else if (item.item_type === 'cheque') {
-          outstandingChecksList.push(mapped);
-          outstandingChecks += amt;
-        } else {
-          outstandingOtherList.push(mapped);
-          outstandingOther += amt;
-        }
-      }
+    // 2. GL Deposits not matched to bank (debit type = money coming in)
+    const unmatchedGLDeposits = await pool.query(`
+      SELECT gl.id, gl.date, gl.description, gl.amount, gl.type, gl.source, gl.sequence
+      FROM gl_transactions gl
+      WHERE gl.type = 'debit'
+        AND NOT (gl.source ILIKE '%payment%' OR gl.source ILIKE '%cheque%' OR gl.source ILIKE '%check%')
+        AND gl.id NOT IN (
+          SELECT gl_tx_id FROM matched_transactions
+          WHERE gl_tx_id IS NOT NULL AND status IN ('matched', 'approved')
+        )
+      ORDER BY gl.date ASC
+    `);
+    for (const row of unmatchedGLDeposits.rows) {
+      const amt = Math.abs(parseFloat(row.amount));
+      outstandingDepositsList.push({
+        id: row.id,
+        date: row.date,
+        description: row.description,
+        amount: amt,
+        reference: row.sequence || '',
+        source: row.source,
+        item_type: 'deposit',
+      });
+      outstandingDeposits += amt;
+    }
 
-      // Also include new unmatched items from the current matching run
-      // that are NOT already in outstanding_items
-      const unmatchedGLChecks = await pool.query(`
-        SELECT gl.* FROM gl_transactions gl
-        WHERE gl.type = 'credit'
-          AND (gl.source ILIKE '%payment%' OR gl.source ILIKE '%cheque%' OR gl.source ILIKE '%check%')
-          AND gl.id NOT IN (
-            SELECT gl_tx_id FROM matched_transactions
-            WHERE gl_tx_id IS NOT NULL AND status IN ('matched', 'approved')
-          )
-          AND gl.id NOT IN (
-            SELECT gl_tx_id FROM outstanding_items WHERE gl_tx_id IS NOT NULL AND period = $1
-          )
-      `, [period]);
-      for (const row of unmatchedGLChecks.rows) {
-        const amt = parseFloat(row.amount);
-        outstandingChecksList.push({
-          id: row.id,
-          date: row.date,
-          description: row.description,
-          amount: amt,
-          reference: row.reference || '',
-          source_period: null,
-          item_type: 'cheque',
-        });
-        outstandingChecks += amt;
-      }
+    // 3. GL Other items not matched (credit type, not payment source)
+    const unmatchedGLOther = await pool.query(`
+      SELECT gl.id, gl.date, gl.description, gl.amount, gl.type, gl.source, gl.sequence
+      FROM gl_transactions gl
+      WHERE gl.type = 'credit'
+        AND NOT (gl.source ILIKE '%payment%' OR gl.source ILIKE '%cheque%' OR gl.source ILIKE '%check%')
+        AND gl.id NOT IN (
+          SELECT gl_tx_id FROM matched_transactions
+          WHERE gl_tx_id IS NOT NULL AND status IN ('matched', 'approved')
+        )
+      ORDER BY gl.date ASC
+    `);
+    for (const row of unmatchedGLOther.rows) {
+      const amt = Math.abs(parseFloat(row.amount));
+      outstandingOtherList.push({
+        id: row.id,
+        date: row.date,
+        description: row.description,
+        amount: amt,
+        reference: row.sequence || '',
+        source: row.source,
+        item_type: 'other',
+      });
+      outstandingOther += amt;
+    }
 
-      const unmatchedGLDeposits = await pool.query(`
-        SELECT gl.* FROM gl_transactions gl
-        WHERE gl.type = 'debit'
-          AND gl.id NOT IN (
-            SELECT gl_tx_id FROM matched_transactions
-            WHERE gl_tx_id IS NOT NULL AND status IN ('matched', 'approved')
-          )
-          AND gl.id NOT IN (
-            SELECT gl_tx_id FROM outstanding_items WHERE gl_tx_id IS NOT NULL AND period = $1
-          )
-      `, [period]);
-      for (const row of unmatchedGLDeposits.rows) {
-        const amt = parseFloat(row.amount);
-        outstandingDepositsList.push({
-          id: row.id,
-          date: row.date,
-          description: row.description,
-          amount: amt,
-          reference: row.reference || '',
-          source_period: null,
-          item_type: 'deposit',
-        });
+    // 4. Add carried-forward outstanding items from previous periods
+    //    that haven't been cleared yet
+    const carriedForward = await pool.query(`
+      SELECT oi.* FROM outstanding_items oi
+      WHERE oi.status = 'outstanding'
+        AND oi.gl_tx_id NOT IN (
+          SELECT id FROM gl_transactions
+        )
+      ORDER BY oi.date ASC
+    `);
+    for (const item of carriedForward.rows) {
+      const amt = Math.abs(parseFloat(item.amount));
+      const mapped = {
+        id: item.id,
+        date: item.date,
+        description: `[Prior period] ${item.description || ''}`,
+        amount: amt,
+        reference: item.reference_number || '',
+        source_period: item.source_period,
+        item_type: item.item_type,
+      };
+      if (item.item_type === 'deposit') {
+        outstandingDepositsList.push(mapped);
         outstandingDeposits += amt;
-      }
-
-      const unmatchedGLOther = await pool.query(`
-        SELECT gl.* FROM gl_transactions gl
-        WHERE gl.type = 'credit'
-          AND NOT (gl.source ILIKE '%payment%' OR gl.source ILIKE '%cheque%' OR gl.source ILIKE '%check%')
-          AND gl.id NOT IN (
-            SELECT gl_tx_id FROM matched_transactions
-            WHERE gl_tx_id IS NOT NULL AND status IN ('matched', 'approved')
-          )
-          AND gl.id NOT IN (
-            SELECT gl_tx_id FROM outstanding_items WHERE gl_tx_id IS NOT NULL AND period = $1
-          )
-      `, [period]);
-      for (const row of unmatchedGLOther.rows) {
-        const amt = parseFloat(row.amount);
-        outstandingOtherList.push({
-          id: row.id,
-          date: row.date,
-          description: row.description,
-          amount: amt,
-          reference: row.reference || '',
-          source_period: null,
-          item_type: 'other',
-        });
+      } else if (item.item_type === 'cheque') {
+        outstandingChecksList.push(mapped);
+        outstandingChecks += amt;
+      } else {
+        outstandingOtherList.push(mapped);
         outstandingOther += amt;
       }
-    } else {
-      // No period specified - use legacy logic from matched_transactions
-      const outstandingDepositsResult = await pool.query(`
-        SELECT gl.* FROM gl_transactions gl
-        WHERE gl.type = 'debit'
-          AND gl.id NOT IN (
-            SELECT gl_tx_id FROM matched_transactions
-            WHERE gl_tx_id IS NOT NULL AND status IN ('matched', 'approved')
-          )
-      `);
-      outstandingDepositsList = outstandingDepositsResult.rows;
-      outstandingDeposits = outstandingDepositsList.reduce(
-        (sum: number, row: any) => sum + parseFloat(row.amount || '0'), 0
-      );
-
-      const outstandingChecksResult = await pool.query(`
-        SELECT gl.* FROM gl_transactions gl
-        WHERE gl.type = 'credit'
-          AND (gl.source ILIKE '%payment%' OR gl.source ILIKE '%cheque%' OR gl.source ILIKE '%check%')
-          AND gl.id NOT IN (
-            SELECT gl_tx_id FROM matched_transactions
-            WHERE gl_tx_id IS NOT NULL AND status IN ('matched', 'approved')
-          )
-      `);
-      outstandingChecksList = outstandingChecksResult.rows;
-      outstandingChecks = outstandingChecksList.reduce(
-        (sum: number, row: any) => sum + parseFloat(row.amount || '0'), 0
-      );
-
-      const outstandingOtherResult = await pool.query(`
-        SELECT gl.* FROM gl_transactions gl
-        WHERE gl.type = 'credit'
-          AND NOT (gl.source ILIKE '%payment%' OR gl.source ILIKE '%cheque%' OR gl.source ILIKE '%check%')
-          AND gl.id NOT IN (
-            SELECT gl_tx_id FROM matched_transactions
-            WHERE gl_tx_id IS NOT NULL AND status IN ('matched', 'approved')
-          )
-      `);
-      outstandingOtherList = outstandingOtherResult.rows;
-      outstandingOther = outstandingOtherList.reduce(
-        (sum: number, row: any) => sum + parseFloat(row.amount || '0'), 0
-      );
     }
 
     // Adjustments from reconciliation_adjustments table
