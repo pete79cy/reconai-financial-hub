@@ -185,7 +185,8 @@ router.post('/periods/:period/close', async (req: Request, res: Response) => {
     );
     const otherAdjustments = parseFloat(otherAdjResult.rows[0].total || '0');
 
-    const adjustedBankBalance = bankBalance + outstandingDeposits - outstandingChecks - outstandingOther;
+    // All outstanding items reduce the adjusted bank balance
+    const adjustedBankBalance = bankBalance - outstandingDeposits - outstandingChecks - outstandingOther;
     const adjustedGLBalance = glBalance + feesNotBooked + depositCorrections + otherAdjustments;
     const proof = adjustedBankBalance - adjustedGLBalance;
 
@@ -609,7 +610,8 @@ router.get('/summary', async (req: Request, res: Response) => {
     const otherAdjustments = parseFloat(otherAdjResult.rows[0].total || '0');
 
     // Calculate adjusted balances
-    const adjustedBankBalance = bankBalance + outstandingDeposits - outstandingChecks - outstandingOther;
+    // All outstanding items reduce the adjusted bank balance
+    const adjustedBankBalance = bankBalance - outstandingDeposits - outstandingChecks - outstandingOther;
     const adjustedGLBalance = glBalance + feesNotBooked + depositCorrections + otherAdjustments;
     const proof = adjustedBankBalance - adjustedGLBalance;
 

@@ -854,7 +854,7 @@ export default function Reconciliation() {
                     <span className="text-xs text-muted-foreground">€</span>
                   </div>
                 </div>
-                <SummaryLine label="Outstanding Deposits" amount={summary.outstandingDeposits} isAdd={true} />
+                <SummaryLine label="Outstanding Deposits" amount={summary.outstandingDeposits} isAdd={false} />
                 <SummaryLine label="Outstanding Checks" amount={summary.outstandingChecks} isAdd={false} />
                 <SummaryLine label="Outstanding Other" amount={summary.outstandingOther} isAdd={false} />
                 <div className="border-t border-border my-2" />
