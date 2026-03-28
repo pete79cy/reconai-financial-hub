@@ -131,6 +131,11 @@ export async function runMigrations() {
       );
     `);
 
+    // Add snapshot column to reconciliation_periods for closed period data
+    await client.query(`
+      ALTER TABLE reconciliation_periods ADD COLUMN IF NOT EXISTS snapshot JSONB;
+    `);
+
     // Learned matching rules from manual matches and rejections
     await client.query(`
       CREATE TABLE IF NOT EXISTS matching_rules (

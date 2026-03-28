@@ -194,6 +194,121 @@ router.post('/periods/:period/close', async (req: Request, res: Response) => {
     const adjustedGLBalance = glBalance + feesNotBooked + depositCorrections + otherAdjustments;
     const proof = adjustedBankBalance - adjustedGLBalance;
 
+    // Build full snapshot of outstanding items for this period
+    // Reuse the same logic as summary endpoint for outstanding lists
+    const snapChecksList: any[] = [];
+    const snapDepositsList: any[] = [];
+    const snapOtherList: any[] = [];
+
+    const snapGLChecks = await client.query(`
+      SELECT gl.id, gl.date, gl.description, gl.amount, gl.source, gl.sequence
+      FROM gl_transactions gl
+      WHERE (gl.source ILIKE '%payment%' OR gl.source ILIKE '%cheque%' OR gl.source ILIKE '%check%')
+        AND gl.id NOT IN (
+          SELECT gl_tx_id FROM matched_transactions
+          WHERE gl_tx_id IS NOT NULL AND status IN ('matched', 'approved')
+        )
+      ORDER BY gl.date ASC
+    `);
+    for (const row of snapGLChecks.rows) {
+      snapChecksList.push({
+        date: row.date, description: row.description,
+        amount: Math.abs(parseFloat(row.amount)),
+        reference: row.sequence || '', source: row.source, item_type: 'cheque',
+      });
+    }
+
+    const snapGLDeposits = await client.query(`
+      SELECT gl.id, gl.date, gl.description, gl.amount, gl.source, gl.sequence
+      FROM gl_transactions gl
+      WHERE gl.type = 'debit'
+        AND NOT (gl.source ILIKE '%payment%' OR gl.source ILIKE '%cheque%' OR gl.source ILIKE '%check%')
+        AND gl.id NOT IN (
+          SELECT gl_tx_id FROM matched_transactions
+          WHERE gl_tx_id IS NOT NULL AND status IN ('matched', 'approved')
+        )
+      ORDER BY gl.date ASC
+    `);
+    for (const row of snapGLDeposits.rows) {
+      snapDepositsList.push({
+        date: row.date, description: row.description,
+        amount: Math.abs(parseFloat(row.amount)),
+        reference: row.sequence || '', source: row.source, item_type: 'deposit',
+      });
+    }
+
+    const snapGLOther = await client.query(`
+      SELECT gl.id, gl.date, gl.description, gl.amount, gl.source, gl.sequence
+      FROM gl_transactions gl
+      WHERE gl.type = 'credit'
+        AND NOT (gl.source ILIKE '%payment%' OR gl.source ILIKE '%cheque%' OR gl.source ILIKE '%check%')
+        AND gl.id NOT IN (
+          SELECT gl_tx_id FROM matched_transactions
+          WHERE gl_tx_id IS NOT NULL AND status IN ('matched', 'approved')
+        )
+      ORDER BY gl.date ASC
+    `);
+    for (const row of snapGLOther.rows) {
+      snapOtherList.push({
+        date: row.date, description: row.description,
+        amount: Math.abs(parseFloat(row.amount)),
+        reference: row.sequence || '', source: row.source, item_type: 'other',
+      });
+    }
+
+    // Carried forward outstanding items
+    const snapCarried = await client.query(`SELECT * FROM outstanding_items WHERE status = 'outstanding' ORDER BY date ASC`);
+    const alreadyCounted = new Set([
+      ...snapGLChecks.rows.map((r: any) => r.id),
+      ...snapGLDeposits.rows.map((r: any) => r.id),
+      ...snapGLOther.rows.map((r: any) => r.id),
+    ]);
+    for (const item of snapCarried.rows) {
+      if (item.gl_tx_id && alreadyCounted.has(item.gl_tx_id)) continue;
+      const mapped = {
+        date: item.date, description: item.description || '',
+        amount: Math.abs(parseFloat(item.amount)),
+        reference: item.reference_number || '',
+        source_period: item.source_period || item.period, item_type: item.item_type,
+      };
+      if (item.item_type === 'deposit') snapDepositsList.push(mapped);
+      else if (item.item_type === 'cheque') snapChecksList.push(mapped);
+      else snapOtherList.push(mapped);
+    }
+
+    // Get matched transactions for this period
+    const matchedResult = await client.query(
+      `SELECT id, date, bank_desc, gl_desc, amount, match_type, confidence, match_category, status
+       FROM matched_transactions
+       WHERE status IN ('matched', 'approved', 'pending')
+       ORDER BY date ASC`
+    );
+
+    // Get adjustments
+    const adjustmentsSnap = await client.query(
+      'SELECT * FROM reconciliation_adjustments WHERE period = $1 ORDER BY created_at DESC',
+      [period]
+    );
+
+    const snapshot = {
+      bankBalance: Math.round(bankBalance * 100) / 100,
+      glBalance: Math.round(glBalance * 100) / 100,
+      outstandingDeposits: Math.round(outstandingDeposits * 100) / 100,
+      outstandingChecks: Math.round(outstandingChecks * 100) / 100,
+      outstandingOther: Math.round(outstandingOther * 100) / 100,
+      adjustedBankBalance: Math.round(adjustedBankBalance * 100) / 100,
+      adjustedGLBalance: Math.round(adjustedGLBalance * 100) / 100,
+      feesNotBooked: Math.round(feesNotBooked * 100) / 100,
+      depositCorrections: Math.round(depositCorrections * 100) / 100,
+      otherAdjustments: Math.round(otherAdjustments * 100) / 100,
+      proof: Math.round(proof * 100) / 100,
+      outstandingChecksList: snapChecksList,
+      outstandingDepositsList: snapDepositsList,
+      outstandingOtherList: snapOtherList,
+      adjustments: adjustmentsSnap.rows,
+      matchedTransactions: matchedResult.rows,
+    };
+
     // Update period with snapshot
     await client.query(
       `UPDATE reconciliation_periods
@@ -203,9 +318,10 @@ router.post('/periods/:period/close', async (req: Request, res: Response) => {
            adjusted_bank_balance = $4,
            adjusted_gl_balance = $5,
            proof = $6,
+           snapshot = $7,
            closed_at = NOW()
        WHERE id = $1`,
-      [period, bankBalance, glBalance, adjustedBankBalance, adjustedGLBalance, proof]
+      [period, bankBalance, glBalance, adjustedBankBalance, adjustedGLBalance, proof, JSON.stringify(snapshot)]
     );
 
     await client.query('COMMIT');
@@ -213,11 +329,7 @@ router.post('/periods/:period/close', async (req: Request, res: Response) => {
     res.json({
       period,
       status: 'closed',
-      bank_balance: Math.round(bankBalance * 100) / 100,
-      gl_balance: Math.round(glBalance * 100) / 100,
-      adjusted_bank_balance: Math.round(adjustedBankBalance * 100) / 100,
-      adjusted_gl_balance: Math.round(adjustedGLBalance * 100) / 100,
-      proof: Math.round(proof * 100) / 100,
+      ...snapshot,
     });
   } catch (err) {
     await client.query('ROLLBACK');
@@ -415,6 +527,23 @@ router.get('/summary', async (req: Request, res: Response) => {
   const { period } = req.query;
 
   try {
+    // If period is closed and has a snapshot, return the frozen snapshot
+    if (period) {
+      const closedCheck = await pool.query(
+        'SELECT status, snapshot FROM reconciliation_periods WHERE id = $1',
+        [period]
+      );
+      if (closedCheck.rows.length > 0 && closedCheck.rows[0].status === 'closed' && closedCheck.rows[0].snapshot) {
+        const snap = closedCheck.rows[0].snapshot;
+        return res.json({
+          period: String(period),
+          ...snap,
+        });
+      }
+    }
+
+    // --- Live calculation for open periods ---
+
     // Bank balance from bank_metadata (closing_balance * -1 since overdraft is negative)
     const metadataResult = await pool.query(
       'SELECT * FROM bank_metadata ORDER BY created_at DESC LIMIT 1'
@@ -766,6 +895,24 @@ router.get('/reports/matched', async (req: Request, res: Response) => {
   }
 
   try {
+    // For closed periods, use the frozen snapshot
+    if (period) {
+      const closedCheck = await pool.query(
+        'SELECT status, snapshot FROM reconciliation_periods WHERE id = $1',
+        [period]
+      );
+      if (closedCheck.rows.length > 0 && closedCheck.rows[0].status === 'closed' && closedCheck.rows[0].snapshot) {
+        const snap = closedCheck.rows[0].snapshot;
+        const rows = snap.matchedTransactions || [];
+        if (format === 'xlsx') {
+          return await generateMatchedExcel(res, rows, period);
+        } else {
+          return generateMatchedPDF(res, rows, period);
+        }
+      }
+    }
+
+    // Live data for open periods
     let query = `
       SELECT mt.*, bt.reference as bank_ref
       FROM matched_transactions mt
@@ -811,7 +958,30 @@ router.get('/reports/outstanding', async (req: Request, res: Response) => {
   }
 
   try {
-    // Reuse the same logic as the summary endpoint to get outstanding items
+    // For closed periods, use the frozen snapshot
+    if (period) {
+      const closedCheck = await pool.query(
+        'SELECT status, snapshot FROM reconciliation_periods WHERE id = $1',
+        [period]
+      );
+      if (closedCheck.rows.length > 0 && closedCheck.rows[0].status === 'closed' && closedCheck.rows[0].snapshot) {
+        const snap = closedCheck.rows[0].snapshot;
+        const summaryData = {
+          bankBalance: snap.bankBalance,
+          adjustedBankBalance: snap.adjustedBankBalance,
+          glBalance: snap.glBalance,
+          adjustedGLBalance: snap.adjustedGLBalance,
+          proof: snap.proof,
+        };
+        if (format === 'xlsx') {
+          return await generateOutstandingExcel(res, snap.outstandingChecksList || [], snap.outstandingDepositsList || [], snap.outstandingOtherList || [], summaryData, period);
+        } else {
+          return generateOutstandingPDF(res, snap.outstandingChecksList || [], snap.outstandingDepositsList || [], snap.outstandingOtherList || [], summaryData, period);
+        }
+      }
+    }
+
+    // Live calculation for open periods
     // 1. Unmatched GL cheques
     const unmatchedGLChecks = await pool.query(`
       SELECT gl.id, gl.date, gl.description, gl.amount, gl.type, gl.source, gl.sequence
