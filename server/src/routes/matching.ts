@@ -126,11 +126,14 @@ router.post('/run', async (_req: Request, res: Response) => {
     // previous months. If found, mark outstanding as cleared and mark
     // the bank tx as used (it's already reconciled from a prior month).
     // ============================================================
-    const chequeBankTxs = bankTxs.filter(bt =>
-      bt.transaction_type &&
-      (bt.transaction_type.toLowerCase().includes('cheque') ||
-       bt.transaction_type.toLowerCase().includes('check'))
-    );
+    // Only true presented cheques — exclude "Deposit - Cash/Cheque" which is a deposit
+    const chequeBankTxs = bankTxs.filter(bt => {
+      if (!bt.transaction_type) return false;
+      const tt = bt.transaction_type.toLowerCase();
+      // Must be a cheque type but NOT a deposit containing "cheque"
+      if (tt.includes('deposit')) return false;
+      return tt.includes('cheque') || tt.includes('check');
+    });
 
     // Get ALL outstanding cheques from all periods
     const outstandingResult = await client.query(
@@ -330,12 +333,16 @@ router.post('/run', async (_req: Request, res: Response) => {
 
     // ============================================================
     // PASS 3: All remaining — exact amount match only → status: 'matched'
-    // No fuzzy matching — anything without exact amount goes to manual
+    // IMPORTANT: Do NOT match non-cheque bank transactions with GL
+    // payment/cheque entries. GL cheque payments should only clear
+    // via cheque reference (Pass 0/1). A bank transfer is not a cheque.
     // ============================================================
     for (const bankTx of bankTxs) {
       if (usedBankIds.has(bankTx.id)) continue;
 
       const bankAmount = parseFloat(bankTx.amount);
+      const bankTT = (bankTx.transaction_type || '').toLowerCase();
+      const isBankCheque = (bankTT.includes('cheque') || bankTT.includes('check')) && !bankTT.includes('deposit');
       let bestMatch: GLRow | null = null;
       let bestConfidence = 0;
 
@@ -344,6 +351,13 @@ router.post('/run', async (_req: Request, res: Response) => {
 
         // Bank and GL types are mirrored in reconciliation
         if (bankTx.type === glTx.type) continue;
+
+        // Prevent matching non-cheque bank items (transfers, fees, etc.)
+        // with GL payment/cheque entries. GL cheques must only clear via
+        // Pass 0 (outstanding) or Pass 1 (reference match).
+        const glSrc = (glTx.source || '').toLowerCase();
+        const isGLCheque = glSrc.includes('payment') || glSrc.includes('cheque') || glSrc.includes('check');
+        if (isGLCheque && !isBankCheque) continue;
 
         const glAmount = parseFloat(glTx.amount);
         const amountDiff = Math.abs(bankAmount - glAmount);
