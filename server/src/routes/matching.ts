@@ -905,11 +905,12 @@ router.post('/manual', async (req: Request, res: Response) => {
       }
     }
 
-    // Remove any existing pending/rejected matches for the bank tx
+    // Remove any existing pending/rejected/unmatched matches for both sides
     await pool.query(
       `DELETE FROM matched_transactions
-       WHERE bank_tx_id = $1 AND status IN ('pending', 'rejected', 'unmatched')`,
-      [bank_tx_id]
+       WHERE (bank_tx_id = $1 OR gl_tx_id = $2)
+         AND status IN ('pending', 'rejected', 'unmatched')`,
+      [bank_tx_id, actualGlTxId]
     );
 
     const confidence = calculateConfidence(bankAmt, glAmt, bankTx.description, glDesc);
