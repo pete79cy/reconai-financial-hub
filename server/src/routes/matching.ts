@@ -7,6 +7,8 @@ import {
   CONFIDENCE_HIGH,
   CONFIDENCE_MEDIUM,
   HIGH_VALUE_THRESHOLD,
+  extractPattern,
+  matchesPattern,
 } from '../utils/reconciliation';
 
 const router = Router();
@@ -93,6 +95,54 @@ function getPreviousPeriod(period: string): string {
     prevYear -= 1;
   }
   return `${prevYear}-${String(prevMonth).padStart(2, '0')}`;
+}
+
+// ============================================================
+// Helper: create or update a learned matching rule
+// ============================================================
+async function createLearnedRule(
+  ruleType: 'include' | 'exclude',
+  bankDesc: string,
+  bankTxType: string | null,
+  glDesc: string,
+  glSource: string | null,
+  confidenceBoost: number,
+  createdFrom: string
+) {
+  const bankPattern = extractPattern(bankDesc);
+  const glPattern = extractPattern(glDesc);
+
+  // Skip if patterns are too short to be meaningful
+  if (bankPattern.length < 3 && glPattern.length < 3) return;
+
+  // Check for duplicate: same type + same bank_tx_type + similar patterns
+  const existing = await pool.query(
+    `SELECT id, times_applied FROM matching_rules
+     WHERE rule_type = $1
+       AND COALESCE(bank_tx_type, '') = COALESCE($2, '')
+       AND COALESCE(gl_source, '') = COALESCE($3, '')
+       AND bank_pattern = $4
+       AND gl_pattern = $5`,
+    [ruleType, bankTxType || '', glSource || '', bankPattern, glPattern]
+  );
+
+  if (existing.rows.length > 0) {
+    // Strengthen existing rule
+    await pool.query(
+      `UPDATE matching_rules SET times_applied = times_applied + 1 WHERE id = $1`,
+      [existing.rows[0].id]
+    );
+  } else {
+    const id = generateId('RULE');
+    await pool.query(
+      `INSERT INTO matching_rules
+       (id, rule_type, bank_pattern, bank_tx_type, gl_pattern, gl_source,
+        confidence_boost, created_from)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+      [id, ruleType, bankPattern, bankTxType || null, glPattern, glSource || null,
+       confidenceBoost, createdFrom]
+    );
+  }
 }
 
 // POST /api/matching/run - run 3-pass auto-match algorithm
@@ -332,6 +382,83 @@ router.post('/run', async (_req: Request, res: Response) => {
     }
 
     // ============================================================
+    // LEARNED RULES PASS: Apply include rules from manual matches
+    // Runs before Pass 3 to give learned patterns priority
+    // ============================================================
+    const includeRules = await client.query(
+      `SELECT * FROM matching_rules WHERE rule_type = 'include' ORDER BY times_applied DESC, priority DESC`
+    );
+
+    for (const rule of includeRules.rows) {
+      for (const bankTx of bankTxs) {
+        if (usedBankIds.has(bankTx.id)) continue;
+
+        // Check if bank tx matches the rule pattern
+        const bankTT = (bankTx.transaction_type || '').toLowerCase();
+        if (rule.bank_tx_type && bankTT !== rule.bank_tx_type.toLowerCase()) continue;
+        if (rule.bank_pattern && !matchesPattern(bankTx.description, rule.bank_pattern)) continue;
+
+        const bankAmount = parseFloat(bankTx.amount);
+        let bestMatch: GLRow | null = null;
+        let bestConfidence = 0;
+
+        for (const glTx of glTxs) {
+          if (usedGLIds.has(glTx.id)) continue;
+          if (bankTx.type === glTx.type) continue;
+
+          // Check if GL tx matches the rule pattern
+          const glSrc = (glTx.source || '').toLowerCase();
+          if (rule.gl_source && glSrc !== rule.gl_source.toLowerCase()) continue;
+          if (rule.gl_pattern && !matchesPattern(glTx.description, rule.gl_pattern)) continue;
+
+          const glAmount = parseFloat(glTx.amount);
+          if (Math.abs(bankAmount - glAmount) >= 0.01) continue;
+
+          const confidence = calculateConfidence(bankAmount, glAmount, bankTx.description, glTx.description)
+            + (rule.confidence_boost || 0);
+
+          if (confidence > bestConfidence) {
+            bestConfidence = confidence;
+            bestMatch = glTx;
+          }
+        }
+
+        if (bestMatch && bestConfidence >= CONFIDENCE_AUTO_MATCH_MIN) {
+          usedBankIds.add(bankTx.id);
+          usedGLIds.add(bestMatch.id);
+
+          const flags: string[] = ['Learned Rule'];
+          if (rules.high_value && bankAmount > HIGH_VALUE_THRESHOLD) flags.push('High Value');
+          if (rules.weekend_alert && isWeekend(bankTx.date)) flags.push('Weekend');
+
+          matches.push({
+            id: generateId('MATCH'),
+            date: bankTx.date,
+            bank_desc: bankTx.description,
+            gl_desc: bestMatch.description,
+            amount: bankAmount,
+            currency: 'EUR',
+            bank_name: bankTx.bank_name || 'BOC',
+            match_type: '1:1',
+            confidence: Math.min(bestConfidence, 100),
+            status: 'matched',
+            approval_stage: 'none',
+            flags,
+            bank_tx_id: bankTx.id,
+            gl_tx_id: bestMatch.id,
+            match_category: 'other',
+          });
+
+          // Increment times_applied
+          await client.query(
+            'UPDATE matching_rules SET times_applied = times_applied + 1 WHERE id = $1',
+            [rule.id]
+          );
+        }
+      }
+    }
+
+    // ============================================================
     // PASS 3: All remaining — exact amount match only → status: 'matched'
     // IMPORTANT: Do NOT match non-cheque bank transactions with GL
     // payment/cheque entries. GL cheque payments should only clear
@@ -459,6 +586,57 @@ router.post('/run', async (_req: Request, res: Response) => {
           gl_tx_id: glTx.id,
           match_category: null,
         });
+      }
+    }
+
+    // ============================================================
+    // EXCLUDE FILTER: Demote matches that hit learned exclude rules
+    // Rejected pairings from the past should not auto-match again
+    // ============================================================
+    const excludeRules = await client.query(
+      `SELECT * FROM matching_rules WHERE rule_type = 'exclude'`
+    );
+
+    if (excludeRules.rows.length > 0) {
+      for (const m of matches) {
+        if (m.status !== 'matched' && m.status !== 'pending') continue;
+        if (!m.bank_desc || !m.gl_desc) continue;
+
+        for (const rule of excludeRules.rows) {
+          const bankMatches = !rule.bank_pattern || matchesPattern(m.bank_desc, rule.bank_pattern);
+          const glMatches = !rule.gl_pattern || matchesPattern(m.gl_desc, rule.gl_pattern);
+
+          // Both patterns must match for the exclude rule to fire
+          if (bankMatches && glMatches) {
+            // Also check tx type and source if specified
+            let txTypeOk = true;
+            let sourceOk = true;
+            if (rule.bank_tx_type && m.bank_tx_id) {
+              const bankRow = bankTxs.find(bt => bt.id === m.bank_tx_id);
+              if (bankRow) {
+                txTypeOk = (bankRow.transaction_type || '').toLowerCase() === rule.bank_tx_type.toLowerCase();
+              }
+            }
+            if (rule.gl_source && m.gl_tx_id) {
+              const glRow = glTxs.find(gl => gl.id === m.gl_tx_id);
+              if (glRow) {
+                sourceOk = (glRow.source || '').toLowerCase() === rule.gl_source.toLowerCase();
+              }
+            }
+
+            if (txTypeOk && sourceOk) {
+              m.status = 'pending';
+              if (!m.flags.includes('Excluded by Rule')) {
+                m.flags.push('Excluded by Rule');
+              }
+              await client.query(
+                'UPDATE matching_rules SET times_applied = times_applied + 1 WHERE id = $1',
+                [rule.id]
+              );
+              break;
+            }
+          }
+        }
       }
     }
 
@@ -763,6 +941,21 @@ router.post('/manual', async (req: Request, res: Response) => {
         flags,
       ]
     );
+
+    // Learn from this manual match — create an 'include' rule
+    try {
+      await createLearnedRule(
+        'include',
+        bankTx.description,
+        bankTx.transaction_type || null,
+        glDesc,
+        glSource || null,
+        20,    // boost confidence by 20 for similar future pairs
+        id
+      );
+    } catch (learnErr) {
+      console.error('Failed to create learned rule (non-fatal):', learnErr);
+    }
 
     res.json(result.rows[0]);
   } catch (err: any) {

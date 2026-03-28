@@ -1,5 +1,7 @@
 import { Router, Request, Response } from 'express';
 import pool from '../db';
+import { generateId } from '../utils/id';
+import { extractPattern } from '../utils/reconciliation';
 
 const router = Router();
 
@@ -70,7 +72,59 @@ router.patch('/:id/status', async (req: Request, res: Response) => {
       return res.status(404).json({ error: 'Transaction not found' });
     }
 
-    res.json(result.rows[0]);
+    const match = result.rows[0];
+
+    // Learn from rejection — create an 'exclude' rule to prevent this pairing
+    if (status === 'rejected' && match.bank_desc && match.gl_desc) {
+      try {
+        // Look up bank transaction_type if available
+        let bankTxType: string | null = null;
+        let glSource: string | null = null;
+        if (match.bank_tx_id) {
+          const bankRow = await pool.query('SELECT transaction_type FROM bank_transactions WHERE id = $1', [match.bank_tx_id]);
+          if (bankRow.rows.length > 0) bankTxType = bankRow.rows[0].transaction_type;
+        }
+        if (match.gl_tx_id) {
+          const glRow = await pool.query('SELECT source FROM gl_transactions WHERE id = $1', [match.gl_tx_id]);
+          if (glRow.rows.length > 0) glSource = glRow.rows[0].source;
+        }
+
+        const bankPattern = extractPattern(match.bank_desc);
+        const glPattern = extractPattern(match.gl_desc);
+
+        if (bankPattern.length >= 3 || glPattern.length >= 3) {
+          // Check for duplicate exclude rule
+          const existing = await pool.query(
+            `SELECT id, times_applied FROM matching_rules
+             WHERE rule_type = 'exclude'
+               AND COALESCE(bank_tx_type, '') = COALESCE($1, '')
+               AND COALESCE(gl_source, '') = COALESCE($2, '')
+               AND bank_pattern = $3
+               AND gl_pattern = $4`,
+            [bankTxType || '', glSource || '', bankPattern, glPattern]
+          );
+
+          if (existing.rows.length > 0) {
+            await pool.query(
+              'UPDATE matching_rules SET times_applied = times_applied + 1 WHERE id = $1',
+              [existing.rows[0].id]
+            );
+          } else {
+            await pool.query(
+              `INSERT INTO matching_rules
+               (id, rule_type, bank_pattern, bank_tx_type, gl_pattern, gl_source,
+                confidence_boost, created_from)
+               VALUES ($1, 'exclude', $2, $3, $4, $5, -100, $6)`,
+              [generateId('RULE'), bankPattern, bankTxType, glPattern, glSource, id]
+            );
+          }
+        }
+      } catch (learnErr) {
+        console.error('Failed to create exclude rule (non-fatal):', learnErr);
+      }
+    }
+
+    res.json(match);
   } catch (err) {
     console.error('Error updating status:', err);
     res.status(500).json({ error: 'Failed to update status' });

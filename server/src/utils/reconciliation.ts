@@ -61,3 +61,57 @@ export const CONFIDENCE_AUTO_MATCH_MIN = 50;
 export const CONFIDENCE_HIGH = 90;
 export const CONFIDENCE_MEDIUM = 80;
 export const HIGH_VALUE_THRESHOLD = 10000;
+
+// ============================================================
+// Pattern extraction for learned matching rules
+// ============================================================
+
+const STOP_WORDS = new Set([
+  'the', 'a', 'an', 'for', 'to', 'from', 'of', 'in', 'on', 'at', 'by',
+  'and', 'or', 'is', 'was', 'are', 'be', 'has', 'had', 'do', 'did',
+  'this', 'that', 'with', 'as', 'but', 'not', 'no', 'so', 'if',
+  'eur', 'usd', 'gbp', 'ltd', 'co',
+]);
+
+/**
+ * Extract a meaningful pattern from a transaction description.
+ * Strips dates, pure numbers, amounts, and stop words.
+ * Keeps vendor names, invoice refs, account identifiers.
+ */
+export function extractPattern(description: string): string {
+  if (!description) return '';
+  let text = description.toLowerCase();
+
+  // Remove date patterns (DD/MM/YYYY, YYYY-MM-DD, DD-MM-YYYY, DD.MM.YYYY)
+  text = text.replace(/\d{1,2}[\/\-\.]\d{1,2}[\/\-\.]\d{2,4}/g, '');
+  text = text.replace(/\d{4}[\/\-\.]\d{1,2}[\/\-\.]\d{1,2}/g, '');
+
+  // Remove monetary amounts (€1,234.56 or 1.234,56 patterns)
+  text = text.replace(/[€$£]?\s*\d{1,3}([.,]\d{3})*([.,]\d{2})?\b/g, '');
+
+  // Remove standalone numbers (references kept if part of a word like INV.2091)
+  text = text.replace(/\b\d+\b/g, '');
+
+  // Remove extra whitespace and special chars (keep dots in abbreviations)
+  text = text.replace(/[><\-\/\\|]+/g, ' ');
+  text = text.replace(/\s+/g, ' ').trim();
+
+  // Split, remove stop words and very short tokens
+  const tokens = text.split(/\s+/).filter(t => t.length > 1 && !STOP_WORDS.has(t));
+
+  return tokens.join(' ');
+}
+
+/**
+ * Check if a description matches a learned pattern.
+ * Returns true if all pattern tokens appear in the description.
+ */
+export function matchesPattern(description: string, pattern: string): boolean {
+  if (!pattern || !description) return false;
+  const descLower = description.toLowerCase();
+  const patternTokens = pattern.split(/\s+/).filter(t => t.length > 1);
+  if (patternTokens.length === 0) return false;
+
+  // All pattern tokens must appear somewhere in the description
+  return patternTokens.every(token => descLower.includes(token));
+}

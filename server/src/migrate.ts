@@ -131,6 +131,24 @@ export async function runMigrations() {
       );
     `);
 
+    // Learned matching rules from manual matches and rejections
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS matching_rules (
+        id TEXT PRIMARY KEY,
+        rule_type TEXT NOT NULL,
+        bank_pattern TEXT,
+        bank_tx_type TEXT,
+        gl_pattern TEXT,
+        gl_source TEXT,
+        amount_exact DECIMAL(15,2),
+        priority INTEGER DEFAULT 0,
+        confidence_boost INTEGER DEFAULT 0,
+        times_applied INTEGER DEFAULT 0,
+        created_from TEXT,
+        created_at TIMESTAMPTZ DEFAULT NOW()
+      );
+    `);
+
     console.log('Database migrations completed successfully');
   } catch (err) {
     console.error('Migration error:', err);
