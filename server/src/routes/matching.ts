@@ -905,13 +905,22 @@ router.post('/manual', async (req: Request, res: Response) => {
       }
     }
 
-    // Remove any existing pending/rejected/unmatched matches for both sides
+    // Remove any existing matches for both the bank and GL side
+    // For bank: only remove non-approved matches
+    // For GL: remove ALL non-approved matches (including 'matched' from auto-run)
     await pool.query(
       `DELETE FROM matched_transactions
-       WHERE (bank_tx_id = $1 OR gl_tx_id = $2)
-         AND status IN ('pending', 'rejected', 'unmatched')`,
-      [bank_tx_id, actualGlTxId]
+       WHERE bank_tx_id = $1 AND status IN ('pending', 'rejected', 'unmatched')`,
+      [bank_tx_id]
     );
+    if (actualGlTxId) {
+      await pool.query(
+        `DELETE FROM matched_transactions
+         WHERE gl_tx_id = $1 AND status IN ('pending', 'rejected', 'unmatched', 'matched')
+           AND match_type != 'Manual'`,
+        [actualGlTxId]
+      );
+    }
 
     const confidence = calculateConfidence(bankAmt, glAmt, bankTx.description, glDesc);
 
@@ -960,12 +969,11 @@ router.post('/manual', async (req: Request, res: Response) => {
 
     res.json(result.rows[0]);
   } catch (err: any) {
-    // Handle duplicate match (unique constraint on bank_tx_id or gl_tx_id)
-    if (err.code === '23505') {
-      return res.status(409).json({ error: 'One of these transactions is already matched' });
-    }
     console.error('Error creating manual match:', err);
-    res.status(500).json({ error: 'Failed to create manual match' });
+    if (err.code === '23505') {
+      return res.status(409).json({ error: `Transaction already matched: ${err.detail || err.message}` });
+    }
+    res.status(500).json({ error: `Failed to create manual match: ${err.message || 'Unknown error'}` });
   }
 });
 
