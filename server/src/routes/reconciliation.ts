@@ -1,6 +1,10 @@
 import { Router, Request, Response } from 'express';
 import pool from '../db';
 import { generateId } from '../utils/id';
+import {
+  generateMatchedExcel, generateMatchedPDF,
+  generateOutstandingExcel, generateOutstandingPDF,
+} from '../utils/reports';
 
 const router = Router();
 
@@ -746,6 +750,214 @@ router.post('/balances', async (req: Request, res: Response) => {
   } catch (err) {
     console.error('Error saving balances:', err);
     res.status(500).json({ error: 'Failed to save balances' });
+  }
+});
+
+// ============================================================
+// Report Export Endpoints
+// ============================================================
+
+// GET /api/reconciliation/reports/matched?period=YYYY-MM&format=pdf|xlsx
+router.get('/reports/matched', async (req: Request, res: Response) => {
+  const { period, format } = req.query as { period?: string; format?: string };
+
+  if (!format || !['pdf', 'xlsx'].includes(format)) {
+    return res.status(400).json({ error: 'format must be pdf or xlsx' });
+  }
+
+  try {
+    let query = `
+      SELECT mt.*, bt.reference as bank_ref
+      FROM matched_transactions mt
+      LEFT JOIN bank_transactions bt ON mt.bank_tx_id = bt.id
+      WHERE mt.status IN ('matched', 'approved')
+    `;
+    const params: string[] = [];
+
+    if (period) {
+      // Filter by date range for the period
+      const [year, month] = period.split('-').map(Number);
+      const startDate = `${year}-${String(month).padStart(2, '0')}-01`;
+      const endMonth = month === 12 ? 1 : month + 1;
+      const endYear = month === 12 ? year + 1 : year;
+      const endDate = `${endYear}-${String(endMonth).padStart(2, '0')}-01`;
+      query += ' AND mt.date >= $1 AND mt.date < $2';
+      params.push(startDate, endDate);
+    }
+    query += ' ORDER BY mt.date ASC, mt.amount DESC';
+
+    const result = await pool.query(query, params);
+    const displayPeriod = period || 'all';
+
+    if (format === 'xlsx') {
+      await generateMatchedExcel(res, result.rows, displayPeriod);
+    } else {
+      generateMatchedPDF(res, result.rows, displayPeriod);
+    }
+  } catch (err) {
+    console.error('Error generating matched report:', err);
+    if (!res.headersSent) {
+      res.status(500).json({ error: 'Failed to generate report' });
+    }
+  }
+});
+
+// GET /api/reconciliation/reports/outstanding?period=YYYY-MM&format=pdf|xlsx
+router.get('/reports/outstanding', async (req: Request, res: Response) => {
+  const { period, format } = req.query as { period?: string; format?: string };
+
+  if (!format || !['pdf', 'xlsx'].includes(format)) {
+    return res.status(400).json({ error: 'format must be pdf or xlsx' });
+  }
+
+  try {
+    // Reuse the same logic as the summary endpoint to get outstanding items
+    // 1. Unmatched GL cheques
+    const unmatchedGLChecks = await pool.query(`
+      SELECT gl.id, gl.date, gl.description, gl.amount, gl.type, gl.source, gl.sequence
+      FROM gl_transactions gl
+      WHERE (gl.source ILIKE '%payment%' OR gl.source ILIKE '%cheque%' OR gl.source ILIKE '%check%')
+        AND gl.id NOT IN (
+          SELECT gl_tx_id FROM matched_transactions
+          WHERE gl_tx_id IS NOT NULL AND status IN ('matched', 'approved')
+        )
+      ORDER BY gl.date ASC
+    `);
+    const outstandingChecksList: any[] = [];
+    for (const row of unmatchedGLChecks.rows) {
+      outstandingChecksList.push({
+        date: row.date, description: row.description,
+        amount: Math.abs(parseFloat(row.amount)),
+        reference: row.sequence || '', source: row.source,
+      });
+    }
+
+    // 2. Unmatched GL deposits
+    const unmatchedGLDeposits = await pool.query(`
+      SELECT gl.id, gl.date, gl.description, gl.amount, gl.type, gl.source, gl.sequence
+      FROM gl_transactions gl
+      WHERE gl.type = 'debit'
+        AND NOT (gl.source ILIKE '%payment%' OR gl.source ILIKE '%cheque%' OR gl.source ILIKE '%check%')
+        AND gl.id NOT IN (
+          SELECT gl_tx_id FROM matched_transactions
+          WHERE gl_tx_id IS NOT NULL AND status IN ('matched', 'approved')
+        )
+      ORDER BY gl.date ASC
+    `);
+    const outstandingDepositsList: any[] = [];
+    for (const row of unmatchedGLDeposits.rows) {
+      outstandingDepositsList.push({
+        date: row.date, description: row.description,
+        amount: Math.abs(parseFloat(row.amount)),
+        reference: row.sequence || '', source: row.source,
+      });
+    }
+
+    // 3. Unmatched GL other
+    const unmatchedGLOther = await pool.query(`
+      SELECT gl.id, gl.date, gl.description, gl.amount, gl.type, gl.source, gl.sequence
+      FROM gl_transactions gl
+      WHERE gl.type = 'credit'
+        AND NOT (gl.source ILIKE '%payment%' OR gl.source ILIKE '%cheque%' OR gl.source ILIKE '%check%')
+        AND gl.id NOT IN (
+          SELECT gl_tx_id FROM matched_transactions
+          WHERE gl_tx_id IS NOT NULL AND status IN ('matched', 'approved')
+        )
+      ORDER BY gl.date ASC
+    `);
+    const outstandingOtherList: any[] = [];
+    for (const row of unmatchedGLOther.rows) {
+      outstandingOtherList.push({
+        date: row.date, description: row.description,
+        amount: Math.abs(parseFloat(row.amount)),
+        reference: row.sequence || '', source: row.source,
+      });
+    }
+
+    // 4. Carried forward outstanding items
+    const alreadyCountedGlIds = new Set([
+      ...unmatchedGLChecks.rows.map((r: any) => r.id),
+      ...unmatchedGLDeposits.rows.map((r: any) => r.id),
+      ...unmatchedGLOther.rows.map((r: any) => r.id),
+    ]);
+    const carriedForward = await pool.query(`
+      SELECT oi.* FROM outstanding_items oi
+      WHERE oi.status = 'outstanding'
+      ORDER BY oi.date ASC
+    `);
+    for (const item of carriedForward.rows) {
+      if (item.gl_tx_id && alreadyCountedGlIds.has(item.gl_tx_id)) continue;
+      const mapped = {
+        date: item.date, description: item.description || '',
+        amount: Math.abs(parseFloat(item.amount)),
+        reference: item.reference_number || '',
+        source: item.source_period || item.period || '',
+      };
+      if (item.item_type === 'deposit') outstandingDepositsList.push(mapped);
+      else if (item.item_type === 'cheque') outstandingChecksList.push(mapped);
+      else outstandingOtherList.push(mapped);
+    }
+
+    // Get summary balances
+    const bankMetaResult = await pool.query(
+      'SELECT closing_balance FROM bank_metadata ORDER BY created_at DESC LIMIT 1'
+    );
+    const bankBalance = bankMetaResult.rows.length > 0
+      ? parseFloat(bankMetaResult.rows[0].closing_balance || '0') : 0;
+
+    const glBalanceResult = await pool.query(`
+      SELECT
+        COALESCE(SUM(CASE WHEN type = 'debit' THEN amount ELSE 0 END), 0) -
+        COALESCE(SUM(CASE WHEN type = 'credit' THEN amount ELSE 0 END), 0) as balance
+      FROM gl_transactions
+    `);
+    const glBalance = parseFloat(glBalanceResult.rows[0].balance || '0');
+
+    // Check for saved manual balances
+    let finalBankBalance = bankBalance;
+    let finalGlBalance = glBalance;
+    if (period) {
+      const periodRow = await pool.query('SELECT bank_balance, gl_balance FROM reconciliation_periods WHERE id = $1', [period]);
+      if (periodRow.rows.length > 0) {
+        if (periodRow.rows[0].bank_balance != null) finalBankBalance = parseFloat(periodRow.rows[0].bank_balance);
+        if (periodRow.rows[0].gl_balance != null) finalGlBalance = parseFloat(periodRow.rows[0].gl_balance);
+      }
+    }
+
+    const outstandingDeposits = outstandingDepositsList.reduce((s, i) => s + i.amount, 0);
+    const outstandingChecks = outstandingChecksList.reduce((s, i) => s + i.amount, 0);
+    const outstandingOther = outstandingOtherList.reduce((s, i) => s + i.amount, 0);
+    const adjustedBankBalance = finalBankBalance - outstandingDeposits - outstandingChecks - outstandingOther;
+
+    // Get adjustments for GL side
+    const adjPeriodFilter = period ? ' AND period = $1' : '';
+    const adjParams = period ? [period] : [];
+    const feesResult = await pool.query(`SELECT COALESCE(SUM(amount), 0) as total FROM reconciliation_adjustments WHERE category = 'fee'${adjPeriodFilter}`, adjParams);
+    const correctionsResult = await pool.query(`SELECT COALESCE(SUM(amount), 0) as total FROM reconciliation_adjustments WHERE category = 'correction'${adjPeriodFilter}`, adjParams);
+    const otherAdjResult = await pool.query(`SELECT COALESCE(SUM(amount), 0) as total FROM reconciliation_adjustments WHERE category NOT IN ('fee', 'correction')${adjPeriodFilter}`, adjParams);
+    const adjustedGLBalance = finalGlBalance + parseFloat(feesResult.rows[0].total) + parseFloat(correctionsResult.rows[0].total) + parseFloat(otherAdjResult.rows[0].total);
+    const proof = adjustedBankBalance - adjustedGLBalance;
+
+    const summaryData = {
+      bankBalance: finalBankBalance,
+      adjustedBankBalance: Math.round(adjustedBankBalance * 100) / 100,
+      glBalance: finalGlBalance,
+      adjustedGLBalance: Math.round(adjustedGLBalance * 100) / 100,
+      proof: Math.round(proof * 100) / 100,
+    };
+
+    const displayPeriod = period || 'all';
+
+    if (format === 'xlsx') {
+      await generateOutstandingExcel(res, outstandingChecksList, outstandingDepositsList, outstandingOtherList, summaryData, displayPeriod);
+    } else {
+      generateOutstandingPDF(res, outstandingChecksList, outstandingDepositsList, outstandingOtherList, summaryData, displayPeriod);
+    }
+  } catch (err) {
+    console.error('Error generating outstanding report:', err);
+    if (!res.headersSent) {
+      res.status(500).json({ error: 'Failed to generate report' });
+    }
   }
 });
 

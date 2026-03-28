@@ -8,9 +8,12 @@
     "start": "node dist/index.js"
   },
   "dependencies": {
+    "@types/pdfkit": "^0.17.5",
     "cors": "^2.8.5",
+    "exceljs": "^4.4.0",
     "express": "^4.21.0",
     "openai": "^6.32.0",
+    "pdfkit": "^0.18.0",
     "pg": "^8.13.0"
   },
   "devDependencies": {

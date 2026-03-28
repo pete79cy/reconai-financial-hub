@@ -15,6 +15,7 @@ import {
   Pencil,
   Trash2,
   Check,
+  FileDown,
 } from 'lucide-react';
 import { TopBar } from '@/components/layout/TopBar';
 import { Button } from '@/components/ui/button';
@@ -155,6 +156,16 @@ export default function Reconciliation() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [importParsedItems, setImportParsedItems] = useState<any[]>([]);
   const [importFileName, setImportFileName] = useState('');
+  const [exportMenuOpen, setExportMenuOpen] = useState<string | null>(null);
+
+  // Download report helper
+  const downloadReport = (reportType: 'matched' | 'outstanding', format: 'pdf' | 'xlsx') => {
+    const periodParam = selectedPeriod ? `&period=${selectedPeriod}` : '';
+    const url = `/api/reconciliation/reports/${reportType}?format=${format}${periodParam}`;
+    window.open(url, '_blank');
+    setExportMenuOpen(null);
+    toast.success(`Downloading ${reportType} report as ${format.toUpperCase()}`);
+  };
 
   // Fetch periods on mount
   useEffect(() => {
@@ -775,6 +786,61 @@ export default function Reconciliation() {
             <Upload className="w-3 h-3" />
             Import Outstanding
           </Button>
+          {/* Export Report Buttons */}
+          <div className="relative">
+            <Button
+              size="sm"
+              variant="outline"
+              className="gap-1"
+              onClick={() => setExportMenuOpen(exportMenuOpen === 'matched' ? null : 'matched')}
+            >
+              <FileDown className="w-3 h-3" />
+              Export Matched
+            </Button>
+            {exportMenuOpen === 'matched' && (
+              <div className="absolute top-full left-0 mt-1 z-50 bg-card border border-border rounded-md shadow-lg p-1 min-w-[120px]">
+                <button
+                  className="w-full text-left px-3 py-1.5 text-sm rounded hover:bg-accent"
+                  onClick={() => downloadReport('matched', 'xlsx')}
+                >
+                  Excel (.xlsx)
+                </button>
+                <button
+                  className="w-full text-left px-3 py-1.5 text-sm rounded hover:bg-accent"
+                  onClick={() => downloadReport('matched', 'pdf')}
+                >
+                  PDF (.pdf)
+                </button>
+              </div>
+            )}
+          </div>
+          <div className="relative">
+            <Button
+              size="sm"
+              variant="outline"
+              className="gap-1"
+              onClick={() => setExportMenuOpen(exportMenuOpen === 'outstanding' ? null : 'outstanding')}
+            >
+              <FileDown className="w-3 h-3" />
+              Export Outstanding
+            </Button>
+            {exportMenuOpen === 'outstanding' && (
+              <div className="absolute top-full left-0 mt-1 z-50 bg-card border border-border rounded-md shadow-lg p-1 min-w-[120px]">
+                <button
+                  className="w-full text-left px-3 py-1.5 text-sm rounded hover:bg-accent"
+                  onClick={() => downloadReport('outstanding', 'xlsx')}
+                >
+                  Excel (.xlsx)
+                </button>
+                <button
+                  className="w-full text-left px-3 py-1.5 text-sm rounded hover:bg-accent"
+                  onClick={() => downloadReport('outstanding', 'pdf')}
+                >
+                  PDF (.pdf)
+                </button>
+              </div>
+            )}
+          </div>
           <Button
             size="sm"
             variant="outline"
