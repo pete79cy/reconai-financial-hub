@@ -159,9 +159,20 @@ router.patch('/:id/approval', async (req: Request, res: Response) => {
 });
 
 // DELETE /api/transactions - clear all matched transactions
+// Preserves outstanding items from closed periods
 router.delete('/', async (_req: Request, res: Response) => {
   try {
+    // Only delete matched_transactions — outstanding_items from closed periods are preserved
     await pool.query('DELETE FROM matched_transactions');
+
+    // Preserve outstanding items that belong to closed periods
+    // Only delete outstanding items from open periods
+    await pool.query(
+      `DELETE FROM outstanding_items
+       WHERE period NOT IN (SELECT id FROM reconciliation_periods WHERE status = 'closed')
+         AND source_period NOT IN (SELECT id FROM reconciliation_periods WHERE status = 'closed')`
+    );
+
     res.json({ success: true });
   } catch (err) {
     console.error('Error clearing transactions:', err);

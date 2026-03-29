@@ -467,8 +467,18 @@ router.delete('/outstanding/clear-all', async (req: Request, res: Response) => {
   }
 
   try {
+    // Check if period is closed — protect closed period data
+    const periodCheck = await pool.query('SELECT status FROM reconciliation_periods WHERE id = $1', [period]);
+    if (periodCheck.rows.length > 0 && periodCheck.rows[0].status === 'closed') {
+      return res.status(403).json({ error: 'Cannot delete outstanding items from a closed period' });
+    }
+
+    // Only delete items belonging to this specific period (not carried forward from closed periods)
     const result = await pool.query(
-      'DELETE FROM outstanding_items WHERE period = $1 RETURNING id',
+      `DELETE FROM outstanding_items
+       WHERE period = $1
+         AND period NOT IN (SELECT id FROM reconciliation_periods WHERE status = 'closed')
+       RETURNING id`,
       [period]
     );
     res.json({ deleted: result.rowCount });
@@ -483,14 +493,21 @@ router.delete('/outstanding/:id', async (req: Request, res: Response) => {
   const { id } = req.params;
 
   try {
+    // Check if this item belongs to a closed period
+    const item = await pool.query('SELECT period FROM outstanding_items WHERE id = $1', [id]);
+    if (item.rows.length === 0) {
+      return res.status(404).json({ error: 'Outstanding item not found' });
+    }
+    const itemPeriod = item.rows[0].period;
+    const periodCheck = await pool.query('SELECT status FROM reconciliation_periods WHERE id = $1', [itemPeriod]);
+    if (periodCheck.rows.length > 0 && periodCheck.rows[0].status === 'closed') {
+      return res.status(403).json({ error: 'Cannot delete outstanding items from a closed period' });
+    }
+
     const result = await pool.query(
       'DELETE FROM outstanding_items WHERE id = $1 RETURNING *',
       [id]
     );
-
-    if (result.rows.length === 0) {
-      return res.status(404).json({ error: 'Outstanding item not found' });
-    }
     res.json({ deleted: true, item: result.rows[0] });
   } catch (err) {
     console.error('Error deleting outstanding item:', err);
@@ -837,13 +854,20 @@ router.delete('/adjustments/:id', async (req: Request, res: Response) => {
   const { id } = req.params;
 
   try {
+    // Check if this adjustment belongs to a closed period
+    const adj = await pool.query('SELECT period FROM reconciliation_adjustments WHERE id = $1', [id]);
+    if (adj.rows.length === 0) {
+      return res.status(404).json({ error: 'Adjustment not found' });
+    }
+    const periodCheck = await pool.query('SELECT status FROM reconciliation_periods WHERE id = $1', [adj.rows[0].period]);
+    if (periodCheck.rows.length > 0 && periodCheck.rows[0].status === 'closed') {
+      return res.status(403).json({ error: 'Cannot delete adjustments from a closed period' });
+    }
+
     const result = await pool.query(
       'DELETE FROM reconciliation_adjustments WHERE id = $1 RETURNING *',
       [id]
     );
-    if (result.rows.length === 0) {
-      return res.status(404).json({ error: 'Adjustment not found' });
-    }
     res.json({ success: true, deleted: result.rows[0] });
   } catch (err) {
     console.error('Error deleting adjustment:', err);
