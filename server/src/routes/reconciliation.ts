@@ -1155,4 +1155,134 @@ router.get('/reports/outstanding', async (req: Request, res: Response) => {
   }
 });
 
+// POST /api/reconciliation/periods/:period/re-snapshot
+// Re-generate snapshot for an already-closed period (backfill)
+router.post('/periods/:period/re-snapshot', async (req: Request, res: Response) => {
+  const { period } = req.params;
+
+  try {
+    const periodRow = await pool.query('SELECT * FROM reconciliation_periods WHERE id = $1', [period]);
+    if (periodRow.rows.length === 0) {
+      return res.status(404).json({ error: 'Period not found' });
+    }
+    if (periodRow.rows[0].status !== 'closed') {
+      return res.status(400).json({ error: 'Period is not closed — use the close endpoint instead' });
+    }
+
+    // Use saved balances from the period row
+    const bankBalance = parseFloat(periodRow.rows[0].bank_balance || '0');
+    const glBalance = parseFloat(periodRow.rows[0].gl_balance || '0');
+
+    // Build outstanding items from current data
+    const snapChecksList: any[] = [];
+    const snapDepositsList: any[] = [];
+    const snapOtherList: any[] = [];
+
+    const snapGLChecks = await pool.query(`
+      SELECT gl.id, gl.date, gl.description, gl.amount, gl.source, gl.sequence
+      FROM gl_transactions gl
+      WHERE (gl.source ILIKE '%payment%' OR gl.source ILIKE '%cheque%' OR gl.source ILIKE '%check%')
+        AND gl.id NOT IN (
+          SELECT gl_tx_id FROM matched_transactions WHERE gl_tx_id IS NOT NULL AND status IN ('matched', 'approved')
+        )
+      ORDER BY gl.date ASC
+    `);
+    for (const row of snapGLChecks.rows) {
+      snapChecksList.push({ date: row.date, description: row.description, amount: Math.abs(parseFloat(row.amount)), reference: row.sequence || '', source: row.source, item_type: 'cheque' });
+    }
+
+    const snapGLDeposits = await pool.query(`
+      SELECT gl.id, gl.date, gl.description, gl.amount, gl.source, gl.sequence
+      FROM gl_transactions gl
+      WHERE gl.type = 'debit'
+        AND NOT (gl.source ILIKE '%payment%' OR gl.source ILIKE '%cheque%' OR gl.source ILIKE '%check%')
+        AND gl.id NOT IN (
+          SELECT gl_tx_id FROM matched_transactions WHERE gl_tx_id IS NOT NULL AND status IN ('matched', 'approved')
+        )
+      ORDER BY gl.date ASC
+    `);
+    for (const row of snapGLDeposits.rows) {
+      snapDepositsList.push({ date: row.date, description: row.description, amount: Math.abs(parseFloat(row.amount)), reference: row.sequence || '', source: row.source, item_type: 'deposit' });
+    }
+
+    const snapGLOther = await pool.query(`
+      SELECT gl.id, gl.date, gl.description, gl.amount, gl.source, gl.sequence
+      FROM gl_transactions gl
+      WHERE gl.type = 'credit'
+        AND NOT (gl.source ILIKE '%payment%' OR gl.source ILIKE '%cheque%' OR gl.source ILIKE '%check%')
+        AND gl.id NOT IN (
+          SELECT gl_tx_id FROM matched_transactions WHERE gl_tx_id IS NOT NULL AND status IN ('matched', 'approved')
+        )
+      ORDER BY gl.date ASC
+    `);
+    for (const row of snapGLOther.rows) {
+      snapOtherList.push({ date: row.date, description: row.description, amount: Math.abs(parseFloat(row.amount)), reference: row.sequence || '', source: row.source, item_type: 'other' });
+    }
+
+    // Carried forward outstanding items
+    const snapCarried = await pool.query('SELECT * FROM outstanding_items WHERE status = \'outstanding\' ORDER BY date ASC');
+    const alreadyCounted = new Set([
+      ...snapGLChecks.rows.map((r: any) => r.id),
+      ...snapGLDeposits.rows.map((r: any) => r.id),
+      ...snapGLOther.rows.map((r: any) => r.id),
+    ]);
+    for (const item of snapCarried.rows) {
+      if (item.gl_tx_id && alreadyCounted.has(item.gl_tx_id)) continue;
+      const mapped = { date: item.date, description: item.description || '', amount: Math.abs(parseFloat(item.amount)), reference: item.reference_number || '', source_period: item.source_period || item.period, item_type: item.item_type };
+      if (item.item_type === 'deposit') snapDepositsList.push(mapped);
+      else if (item.item_type === 'cheque') snapChecksList.push(mapped);
+      else snapOtherList.push(mapped);
+    }
+
+    const outstandingDeposits = snapDepositsList.reduce((s, i) => s + i.amount, 0);
+    const outstandingChecks = snapChecksList.reduce((s, i) => s + i.amount, 0);
+    const outstandingOther = snapOtherList.reduce((s, i) => s + i.amount, 0);
+    const adjustedBankBalance = bankBalance - outstandingDeposits - outstandingChecks - outstandingOther;
+
+    // Adjustments
+    const feesResult = await pool.query('SELECT COALESCE(SUM(amount), 0) as total FROM reconciliation_adjustments WHERE category = \'fee\' AND period = $1', [period]);
+    const correctionsResult = await pool.query('SELECT COALESCE(SUM(amount), 0) as total FROM reconciliation_adjustments WHERE category = \'correction\' AND period = $1', [period]);
+    const otherAdjResult = await pool.query('SELECT COALESCE(SUM(amount), 0) as total FROM reconciliation_adjustments WHERE category NOT IN (\'fee\', \'correction\') AND period = $1', [period]);
+    const feesNotBooked = parseFloat(feesResult.rows[0].total);
+    const depositCorrections = parseFloat(correctionsResult.rows[0].total);
+    const otherAdjustments = parseFloat(otherAdjResult.rows[0].total);
+    const adjustedGLBalance = glBalance + feesNotBooked + depositCorrections + otherAdjustments;
+    const proof = adjustedBankBalance - adjustedGLBalance;
+
+    const matchedResult = await pool.query(
+      'SELECT id, date, bank_desc, gl_desc, amount, match_type, confidence, match_category, status FROM matched_transactions WHERE status IN (\'matched\', \'approved\', \'pending\') ORDER BY date ASC'
+    );
+    const adjustmentsSnap = await pool.query('SELECT * FROM reconciliation_adjustments WHERE period = $1 ORDER BY created_at DESC', [period]);
+
+    const snapshot = {
+      bankBalance: Math.round(bankBalance * 100) / 100,
+      glBalance: Math.round(glBalance * 100) / 100,
+      outstandingDeposits: Math.round(outstandingDeposits * 100) / 100,
+      outstandingChecks: Math.round(outstandingChecks * 100) / 100,
+      outstandingOther: Math.round(outstandingOther * 100) / 100,
+      adjustedBankBalance: Math.round(adjustedBankBalance * 100) / 100,
+      adjustedGLBalance: Math.round(adjustedGLBalance * 100) / 100,
+      feesNotBooked: Math.round(feesNotBooked * 100) / 100,
+      depositCorrections: Math.round(depositCorrections * 100) / 100,
+      otherAdjustments: Math.round(otherAdjustments * 100) / 100,
+      proof: Math.round(proof * 100) / 100,
+      outstandingChecksList: snapChecksList,
+      outstandingDepositsList: snapDepositsList,
+      outstandingOtherList: snapOtherList,
+      adjustments: adjustmentsSnap.rows,
+      matchedTransactions: matchedResult.rows,
+    };
+
+    await pool.query(
+      'UPDATE reconciliation_periods SET snapshot = $2, adjusted_bank_balance = $3, adjusted_gl_balance = $4, proof = $5 WHERE id = $1',
+      [period, JSON.stringify(snapshot), snapshot.adjustedBankBalance, snapshot.adjustedGLBalance, snapshot.proof]
+    );
+
+    res.json({ success: true, period, ...snapshot });
+  } catch (err) {
+    console.error('Error re-snapshotting period:', err);
+    res.status(500).json({ error: 'Failed to re-snapshot period' });
+  }
+});
+
 export default router;
