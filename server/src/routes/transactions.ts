@@ -180,4 +180,23 @@ router.delete('/', async (_req: Request, res: Response) => {
   }
 });
 
+// DELETE /api/transactions/reset-all - FULL DATABASE RESET for testing
+// Wipes ALL data including closed periods
+router.delete('/reset-all', async (_req: Request, res: Response) => {
+  try {
+    await pool.query('DELETE FROM matched_transactions');
+    await pool.query('DELETE FROM outstanding_items');
+    await pool.query('DELETE FROM reconciliation_adjustments');
+    await pool.query('DELETE FROM reconciliation_periods');
+    await pool.query('DELETE FROM bank_transactions');
+    await pool.query('DELETE FROM gl_transactions');
+    await pool.query('DELETE FROM bank_metadata');
+    await pool.query('DELETE FROM matching_rules');
+    res.json({ success: true, message: 'All data has been reset' });
+  } catch (err) {
+    console.error('Error resetting all data:', err);
+    res.status(500).json({ error: 'Failed to reset all data' });
+  }
+});
+
 export default router;
